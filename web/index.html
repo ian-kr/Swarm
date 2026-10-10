@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RED CELL</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='9' fill='%23ff4d5e'/><circle cx='16' cy='16' r='14' fill='none' stroke='%23ff4d5e' stroke-width='2'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="importmap">
+    { "imports": { "three": "/static/vendor/three.module.js", "three/addons/": "/static/vendor/addons/" } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <div>
+        <div class="brand-name">RED CELL</div>
+        <div class="brand-sub">Counter-drone defense trainer</div>
+      </div>
+    </div>
+    <nav class="phases" aria-label="Mission phase">
+      <span class="phase" data-phase="defend"><b>1</b> Defend</span>
+      <span class="phase" data-phase="attack"><b>2</b> Attack</span>
+      <span class="phase" data-phase="debrief"><b>3</b> Debrief</span>
+    </nav>
+    <div class="top-actions">
+      <button class="ghost" id="btn-hood">Under the hood</button>
+      <button class="ghost" id="btn-help" aria-label="How to play">?</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel left" id="panel-left">
+      <section>
+        <label class="label" for="sel-map">Theater</label>
+        <select id="sel-map"></select>
+        <p class="muted small" id="map-blurb"></p>
+      </section>
+
+      <section>
+        <div class="label">Enemy</div>
+        <div class="seg" id="seg-diff" role="radiogroup"></div>
+        <p class="muted small" id="diff-blurb"></p>
+      </section>
+
+      <section>
+        <div class="row between">
+          <div class="label">Budget remaining</div>
+          <div class="mono"><span id="budget-left">15</span> / <span id="budget-total">15</span></div>
+        </div>
+        <div class="meter"><div class="meter-fill" id="budget-fill"></div></div>
+      </section>
+
+      <section class="units" id="units"></section>
+
+      <p class="muted small hint">
+        <b>Click</b> terrain to place the selected unit, click a unit to remove it.
+        <b>Right-drag</b> to orbit, <b>scroll</b> to zoom.
+      </p>
+
+      <div class="actions">
+        <button class="ghost" id="btn-clear">Clear</button>
+        <button class="ghost" id="btn-ai" hidden>Load AI layout</button>
+      </div>
+      <button class="primary" id="btn-launch">Launch attack</button>
+      <p class="error small" id="err" role="alert"></p>
+    </aside>
+
+    <section class="stage" id="stage">
+      <div id="tags"></div>
+      <div class="legend" id="legend">
+        <span><i style="background:var(--radar)"></i>Radar coverage</span>
+        <span><i style="background:var(--jammer)"></i>Jammer</span>
+        <span><i style="background:var(--pad)"></i>Interceptor sensor</span>
+        <span><i class="hatch"></i>Above flight ceiling</span>
+        <span><i style="background:var(--enemy)"></i>Drone spawn</span>
+      </div>
+      <div class="feed" id="feed" aria-live="polite"></div>
+      <div class="playback" id="playback" hidden>
+        <button class="icon" id="btn-play" aria-label="Pause">❚❚</button>
+        <input type="range" id="scrub" min="0" max="100" value="0" step="0.01" aria-label="Timeline">
+        <span class="mono small" id="clock">T+00</span>
+        <div class="seg small-seg" id="seg-speed">
+          <button data-speed="0.5">½×</button><button data-speed="1" class="on">1×</button><button data-speed="2">2×</button>
+        </div>
+        <button class="ghost small-btn" id="btn-skip">Skip to debrief</button>
+      </div>
+      <div class="simulating" id="simulating" hidden>
+        <div class="spinner"></div>
+        <div>Simulating <span id="sim-count">64</span> attacks…</div>
+      </div>
+    </section>
+
+    <aside class="panel right" id="panel-right" hidden>
+      <div class="row between">
+        <h2>Debrief</h2>
+        <span class="chip" id="db-diff"></span>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi-value" id="db-rate">0%</div>
+        <div class="kpi-label">of drones broke through, averaged over <span id="db-n">64</span> simulated attacks</div>
+      </div>
+      <div class="hist" id="db-hist" aria-label="Distribution of breaches per attack"></div>
+      <div class="hist-axis muted small"><span>0 through</span><span>breaches per attack</span><span>all 6</span></div>
+
+      <div class="stats">
+        <div><span class="stat" id="db-det">0%</span><span class="muted small">drones detected</span></div>
+        <div><span class="stat" id="db-kills">0</span><span class="muted small">kills per attack</span></div>
+        <div><span class="stat" id="db-replay">0/6</span><span class="muted small">this replay</span></div>
+      </div>
+
+      <section class="callout" id="db-blind">
+        <div class="label">Blind spot</div>
+        <p id="db-blind-text"></p>
+        <p class="muted small" id="db-blind-tip"></p>
+        <button class="ghost" id="btn-suggest">Place suggested radar</button>
+      </section>
+
+      <section>
+        <div class="label">Map overlays</div>
+        <div class="toggles" id="toggles">
+          <label><input type="checkbox" data-ov="breach" checked> Breach corridors</label>
+          <label><input type="checkbox" data-ov="traffic"> All drone traffic</label>
+          <label><input type="checkbox" data-ov="astar"> A* planner view</label>
+          <label><input type="checkbox" data-ov="sensors" checked> Sensor coverage</label>
+        </div>
+        <p class="muted small" id="astar-note" hidden>
+          <span class="swatch" style="background:var(--astar)"></span> threat-aware A* route ·
+          <span class="swatch" style="background:#9aa7b4"></span> plain shortest path ·
+          <span class="swatch" style="background:var(--enemy)"></span> routes the enemy actually flew ·
+          <span class="swatch" style="background:var(--radar);opacity:.6"></span> nodes A* explored (<span id="astar-n"></span>)
+        </p>
+      </section>
+
+      <section class="compare" id="db-compare" hidden>
+        <div class="label">vs. AI-optimized defense</div>
+        <p id="db-compare-text"></p>
+      </section>
+
+      <div class="actions">
+        <button class="ghost" id="btn-replay">Watch replay</button>
+        <button class="primary" id="btn-edit">Adjust defenses</button>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="dlg-intro" class="modal">
+    <div class="modal-body">
+      <div class="eyebrow">Mission briefing</div>
+      <h1>Hold the base against a swarm that learns.</h1>
+      <p>Six attack drones are inbound from the north. You have a budget of <b>15</b> to build your air defense:</p>
+      <ul class="briefing">
+        <li><i style="background:var(--radar)"></i><b>Radar</b> detects drones, but hills block its line of sight.</li>
+        <li><i style="background:var(--jammer)"></i><b>Jammer</b> scrambles drone navigation nearby.</li>
+        <li><i style="background:var(--pad)"></i><b>Interceptor pad</b> launches 3 interceptors at any <em>detected</em> drone.</li>
+      </ul>
+      <p class="muted">The enemy swarm was trained with reinforcement learning on AMD GPUs, playing millions of battles against
+        random defenses until it learned to find the gaps. Your job is to leave it none.</p>
+      <form method="dialog"><button class="primary">Start defending</button></form>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-hood" class="modal wide">
+    <div class="modal-body">
+      <div class="row between">
+        <div>
+          <div class="eyebrow">Under the hood</div>
+          <h1>How the red team learned to attack</h1>
+        </div>
+        <form method="dialog"><button class="ghost" aria-label="Close">Close</button></form>
+      </div>
+      <div class="hood-grid">
+        <div>
+          <div class="label" id="chart-label">Training curve</div>
+          <div id="chart" class="chart"></div>
+          <div class="hood-stats" id="hood-stats"></div>
+        </div>
+        <div class="pipeline">
+          <div class="label">Pipeline</div>
+          <ol>
+            <li><b>Terrain tables</b>: precomputed line-of-sight between every pair of cells and all-pairs Dijkstra shortest paths. Pathfinding and radar checks become O(1) tensor lookups.</li>
+            <li><b>Batched simulation</b>: thousands of battles stepped together as PyTorch tensor ops on the GPU (ROCm on AMD).</li>
+            <li><b>Threat field</b>: for every battle, a GPU Bellman-Ford pass computes a threat-aware distance to the base (the A* cost model) for every cell. Each drone <em>sees</em> this pathfinding field.</li>
+            <li><b>PPO self-improvement</b>: one shared policy network flies every drone. Rewards for progress and breaching, penalties for being shot down or running out of time. Each drone can also choose <em>follow the pathfinder</em>, so it learns when to trust A*-style routing and when to improvise.</li>
+            <li><b>Arms race</b>: a genetic search keeps finding defenses the current swarm can barely beat, and the swarm trains against them.</li>
+            <li><b>Difficulty</b>: Veteran is the best checkpoint on strong defenses. Regular and Recruit fly the same network with noisier decisions.</li>
+            <li><b>Interceptors</b> chase tracked drones along Dijkstra next-hop tables. The <b>Scripted</b> enemy uses threat-aware A*.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

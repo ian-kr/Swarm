@@ -1,0 +1,8 @@
+# PyTorch: install the build for your GPU from https://pytorch.org/get-started/locally/
+# (ROCm for AMD, CUDA for NVIDIA, or CPU). The game server runs fine on CPU.
+torch>=2.3
+numpy
+scipy
+fastapi
+uvicorn
+pydantic>=2
