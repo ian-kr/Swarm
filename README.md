@@ -1,10 +1,10 @@
-# RED CELL
+# SWARM
 
 **A counter-drone defense trainer where the enemy swarm learned to attack using reinforcement learning on AMD GPUs.**
 
 Cheap attack drones are now one of the biggest threats to bases and critical infrastructure. Operators and planners
 usually practice against scripted enemies that act the same way every time, which teaches the wrong lessons.
-In RED CELL you build an air defense on real-feeling terrain, then face a drone swarm that has played millions of
+In SWARM you build an air defense on real-feeling terrain, then face a drone swarm that has played millions of
 battles and learned to find the holes: radar shadows behind ridges, gaps between sensors, jammer-free lanes.
 The debrief shows *where* and *why* your defense failed, and how to fix it.
 
@@ -57,7 +57,7 @@ commits.
 1. **Defend.** Spend a budget of 15 on radars (line-of-sight detection), jammers (scramble drone navigation) and
    interceptor pads (3 interceptors each, which chase *detected* drones). Hover with the radar tool to preview exactly
    what a radar would see from that spot.
-2. **Attack.** Pick an enemy: *Scripted (A\*)*, *Recruit*, *Regular* or *Veteran*, then launch. RED CELL simulates
+2. **Attack.** Pick an enemy: *Scripted (A\*)*, *Recruit*, *Regular* or *Veteran*, then launch. SWARM simulates
    64 attacks and replays a representative one.
 3. **Review.** The after-action report shows your breach rate across all attacks, the corridors the drones used, an
    automatic blind-spot diagnosis with a suggested radar position, the A\* planner view, and how you compare to an

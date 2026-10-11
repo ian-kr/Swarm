@@ -1,4 +1,4 @@
-"""PPO training for the RED CELL attacker swarm.
+"""PPO training for the SWARM attacker swarm.
 
 Runs thousands of battles in parallel on one GPU (AMD via ROCm, or NVIDIA via
 CUDA: PyTorch exposes both through `torch.cuda`). Every drone is an agent;

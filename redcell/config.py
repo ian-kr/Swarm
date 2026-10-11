@@ -1,4 +1,4 @@
-"""Shared constants for the RED CELL simulation.
+"""Shared constants for the SWARM simulation.
 
 Everything that defines the rules of the game lives here so the GPU training
 environment and the playable game server can never disagree.

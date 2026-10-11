@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train the RED CELL swarm on an AMD cloud GPU (ROCm). Run inside tmux so it survives disconnects:
+# Train the SWARM swarm on an AMD cloud GPU (ROCm). Run inside tmux so it survives disconnects:
 #   tmux new -s train 'bash scripts/cloud_train.sh'
 #   MODE=360 bash scripts/cloud_train.sh      # the 360-degree theater (drones from every side)
 # (no tmux? use: nohup bash scripts/cloud_train.sh > train.out 2>&1 &)

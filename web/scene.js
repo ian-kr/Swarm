@@ -1110,7 +1110,7 @@ export class Scene3D {
         if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true;   // recompile for the new shadow type
       });
       this.resize();
-      console.info(`RED CELL: ${Math.round(fps)} fps, using lower render quality`);
+      console.info(`SWARM: ${Math.round(fps)} fps, using lower render quality`);
     }
   }
 

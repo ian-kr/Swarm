@@ -863,7 +863,7 @@ async function loadBrain() {
     // the server re-ran the battle from its seed: it must be the battle on screen, step for step
     const frames = res.rep.frames;
     d.matches = d.t.every((t, i) => !frames[t] || frames[t].d[S.focus][0] === d.cell[i]);
-    if (!d.matches) console.warn('RED CELL: network re-run did not reproduce this replay exactly');
+    if (!d.matches) console.warn('SWARM: network re-run did not reproduce this replay exactly');
     S.net.cache.set(key, d);
     if (S.net.cache.size > 8) S.net.cache.delete(S.net.cache.keys().next().value);
   }

@@ -1,4 +1,4 @@
-"""RED CELL game server: serves the web client and runs simulations.
+"""SWARM game server: serves the web client and runs simulations.
 
     python server.py            # http://localhost:8000
 """
@@ -21,7 +21,7 @@ from redcell.game import Game, LayoutError
 from redcell.terrain import THEATERS
 
 ROOT = Path(__file__).resolve().parent
-app = FastAPI(title="RED CELL")
+app = FastAPI(title="SWARM")
 # one game per theater: "north" (the original north-axis game) and "360" (drones from every side)
 GAMES = {m: Game(device=os.environ.get("REDCELL_DEVICE", "cpu"), mode=m) for m in THEATERS}
 
