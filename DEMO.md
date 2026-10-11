@@ -2,10 +2,10 @@
 
 ## Before judging
 - [ ] `bash scripts/serve.sh`, open http://localhost:8000 in a full-screen browser window
-- [ ] Hard-refresh once. The mission briefing shows only on first visit (click **?** to reopen it)
+- [ ] Hard-refresh once. The mission briefing shows only on first visit (click **Briefing** to reopen it)
 - [ ] Check that all four enemies are enabled (the learned ones need `models/` and `data/difficulties.json`)
 - [ ] Record a backup screen capture of one full run in case the laptop or venue misbehaves
-- [ ] Everything runs offline (Three.js is vendored), so wifi isn't needed
+- [ ] Everything runs offline (Three.js and the fonts are vendored), so wifi isn't needed
 
 ## The 3-minute pitch
 
@@ -16,25 +16,32 @@
 **2. The judge plays (60 s)**: hand them the mouse.
 - "You have 15 points. Radars see, but hills block them. Hover here and you'll see exactly what this radar can see."
 - Let them place 4–5 units, pick **Veteran**, press **Launch attack**.
-- While it replays: "Faded drones are ones your sensors haven't detected. Watch them use the valley."
+- While it replays: "Faded drones are ones your sensors haven't detected. Watch them use the valley." The six
+  diamonds in the bottom bar are the drones (military symbology for hostile air tracks): they fill in when radar
+  tracks one, cross out when it's shot down, and go solid red when it breaks through.
 
-**3. Debrief (40 s)**
+**3. After-action report (40 s)**
 - Read the breach rate: "That's averaged over 64 simulated attacks, not one lucky run."
 - Point at the blind-spot callout and the red corridor. Click **Place suggested radar** and relaunch if time allows.
 - Turn on **A\* planner view**: "Gold is what a classic A\* planner does against your defense, gray is the plain
   shortest path, red is what the trained swarm actually flew."
 
-**4. Under the hood (40 s)**: click the button.
+**4. Watch it learn (30 s)**: in the report, click **Run the training time-lapse**.
+- "This is *your* defense against the same network at five points in its own training run."
+- "At the first update it flies almost at random and barely gets through. Watch the breach rate climb as it learns
+  to follow the pathfinder, then terrain masking and timing."
+
+**5. How it was trained (40 s)**: click the link at the top right.
 - "Every rule is a tensor op, so we run 4,096 battles at once on an AMD GPU with ROCm."
 - "One shared neural network flies every drone, trained with PPO."
 - "Every 10 updates a genetic search finds the defenses that best stop the *current* swarm, and the swarm trains
   against those. It's an arms race."
-- The numbers: "Against strong defenses that stop the classic A\* planner, our trained swarm gets **40% more drones
-  through**: 32% vs 23%, measured on 197 defenses it never trained on."
-- How: "It spends half as long detected, follows the pathfinder 60% of the time and improvises the rest, waits
-  for openings, and spreads its approach so it's harder to predict."
+- The numbers: "It learned from random flight in 16 minutes on one AMD GPU. Against strong defenses that stop the
+  classic A\* planner, it gets **15% more drones through**: 26% vs 23%, measured on 197 defenses it never trained on."
+- How: "It spends less than half as long detected (4% vs 10%), waits for openings instead of rushing, spreads its
+  approach over twice as many cells, and follows the pathfinder about a third of the time, improvising the rest."
 
-**5. Close (20 s)**
+**6. Close (20 s)**
 > "Who it helps: counter-drone operators and base planners. It lets them practice against an adversary that adapts,
 > and see exactly why their defense failed."
 
@@ -44,12 +51,32 @@
 | Serious game / training simulation | Defend → attack → debrief training loop with measurable score (breach rate over 64 runs) |
 | Pathfinding that's meaningful | Interceptors route by Dijkstra tables. The scripted enemy uses threat-aware A\* with replanning. The learned swarm is rewarded along the shortest-path field. The debrief visualizes A\*'s search |
 | Explain who it helps / what problem | Counter-UAS operators and planners. Scripted enemies teach predictable habits |
-| Demonstrate it works | Live play, 64-run statistics, A\* vs. learned routes overlay, training curve |
+| Demonstrate it works | Live play, 64-run statistics, A\* vs. learned routes overlay, training curve, training time-lapse on the player's own defense |
+
+## Design talking points (the rubric asks if the design is intentional)
+- **Two materials.** The live console is dark: the map, the controls, the battle. Anything you'd hand to someone is
+  paper: the operation order (briefing), the after-action report, the technical annex. Paper means "a record you can
+  act on", the console means "live".
+- **Real conventions.** Unit symbols follow MIL-STD-2525 / NATO APP-6: friendly units in rectangular frames (the
+  jammer is "EW", electronic warfare; the interceptor pad has the air-defense dome), hostile air tracks are diamonds.
+  Report timestamps are military date-time groups (e.g. 101932ZOCT26 = 10th, 19:32 Zulu, Oct 2026). The green
+  banners mimic the classification markings on real ops software. It's styling: nothing here is classified.
+- **One accent per job.** Map colors identify units (cyan radar, amber jammer, green interceptors, red enemy). The
+  interface itself stays neutral so the map carries the color. The report's stamp (Held, Penetrated, Overrun,
+  Deterred) gives the verdict at a glance.
+- **Sand-table terrain.** The board is a realistic scale model: grass and forest on low ground, bare rock on steep
+  faces, and snow only on peaks above the drones' flight ceiling, so "white = drones can't fly here" reads at a
+  glance. Sun shadows and darker valleys make the relief, and therefore the radar shadows, easy to judge.
+- **RTS command bar.** Units, budget and the launch button live in one bottom bar like a strategy game, so the map
+  gets the whole screen.
 
 ## Likely judge questions (know these cold)
-- **Why is the training curve flat after the Veteran point?** The swarm starts at A\* level because it can choose
-  "follow the pathfinder". Most of the learning (when to deviate) happened in the first ~25 updates. Later updates
-  were noisier, so we kept the best checkpoint and verified it on held-out defenses.
+- **Why does the training curve flatten?** It starts from random flight (2%), learns to use the pathfinder and
+  reaches A\* level by update 10, then improves slowly (when to wait, when to deviate). Later checkpoints are noisy,
+  so we keep the best one on the selection benchmark and verify it on held-out defenses.
+- **Why did the breach rate go down from your first model (32% to 26%)?** The first model loitered: 12% of its drones
+  never attacked, and against the strongest defenses none did, which made the game look broken. Fixing that cost a
+  few points of breach rate, but the enemy now always commits. We'd rather report the honest number.
 - **How are Recruit/Regular easier?** Same network, but it samples its moves with more randomness (temperature 3 and 2).
 - **How does line-of-sight work?** For every pair of cells we march along the ray from the radar mast to a drone
   flying 0.03 above the terrain and check whether terrain pokes above the line (bilinear height sampling). Precomputed
@@ -67,8 +94,16 @@
   from A\*-level route knowledge and learns what A\* can't: timing, spreading out, dodging interceptors.
 - **Why an MLP, not a CNN?** We profiled on the Radeon: small convolutions were 30–60× slower than the equivalent
   matrix multiplies under ROCm, and fp32 GEMMs were 40× slower than bf16. Switching to a bf16 MLP made training 13× faster.
-- **Reward?** Progress along shortest-path distance, +10 breach, −1 shot down, −1 if still flying at timeout. We removed a
+- **Reward?** Progress along shortest-path distance, +10 breach, −1 shot down, −3 if still flying at timeout. We removed a
   per-step detection penalty because it made the swarm hide and time out instead of attacking.
+- **What's "never committed" / the stall rate?** Drones still airborne at the time limit: they neither broke through
+  nor got shot down. Our first Veteran did this against the strongest defenses: it loitered outside radar range
+  until time ran out. Timing out cost the same as being shot down, and the blue-team search discarded every defense
+  the swarm couldn't beat, including the ones where it hid, so it never practiced against them. The AI-layout
+  search then *found* that habit and exploited it (0% breach, 0% detected, all six drones still flying). We made
+  timing out 3× as costly as being shot down, made the blue-team search keep stall-inducing defenses, retrained,
+  and now reject any checkpoint that stalls on more than 10% of drones. A good example of an RL agent exploiting
+  its reward, and of an arms race finding the exploit before we did.
 - **Why PPO?** Stable on-policy algorithm that handles many parallel agents well. Shared parameters across drones.
 - **What did you learn / what was hard?** (Answer honestly.) E.g. keeping the training simulation and the game
   identical (solved by making them the *same code*), GPU memory limits, reward shaping, game balance (the first

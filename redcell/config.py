@@ -38,7 +38,9 @@ R_PROGRESS = 0.05         # per cell of shortest-path distance closed to base
 R_BREACH = 10.0
 R_KILLED = -1.0
 R_DETECTED = 0.0          # no per-step penalty: an earlier version learned to hide and time out instead of attacking
-R_TIMEOUT = -1.0          # still airborne when time runs out = mission failed
+R_TIMEOUT = -3.0          # still airborne when time runs out = mission failed. Worse than being shot down
+                          # (-1): with equal penalties the swarm learned to loiter outside radar range
+                          # against strong defenses instead of committing to an attack.
 R_STEP = -0.01
 
 # --- observation -----------------------------------------------------------

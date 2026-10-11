@@ -46,7 +46,7 @@ class SimReq(BaseModel):
 def get_config():
     return dict(grid=C.GRID, budget=C.BUDGET, units=C.UNITS, drones=C.N_DRONES, max_steps=C.MAX_STEPS,
                 interceptors_per_pad=C.INTERCEPTORS_PER_PAD, kill_prob=C.KILL_PROB,
-                difficulties=game.difficulties(),
+                difficulties=game.difficulties(), timeline=game.timeline_info(),
                 maps=[dict(id=i, name=n, blurb=b) for i, (n, b) in enumerate(zip(game.ms.names, game.ms.blurbs))])
 
 
@@ -87,7 +87,8 @@ def get_training():
             metrics.append({k: r.get(k) for k in ("update", "steps", "time", "train_breach", "eval_breach", "ent", "sps")})
     return dict(metrics=metrics, levels=spec.get("levels", {}), device=spec.get("device"),
                 baseline=spec.get("scripted_eval_breach"), baseline_random=spec.get("scripted_random_breach"),
-                curve=spec.get("curve"), strong_layouts=spec.get("strong_layouts"), heldout=spec.get("heldout"))
+                curve=spec.get("curve"), strong_layouts=spec.get("strong_layouts"), heldout=spec.get("heldout"),
+                timeline=game.timeline_info())
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")

@@ -32,7 +32,7 @@ def mlp(*sizes):
 
 
 class AttackerPolicy(nn.Module):
-    def __init__(self, hidden: int = 256, amp: bool = False):
+    def __init__(self, hidden: int = 256, amp: bool = False, follow_bias: float = 2.0):
         super().__init__()
         self.amp = amp
         self.temperature = 1.0   # >1 = noisier decisions (used for the easier difficulty levels)
@@ -44,8 +44,8 @@ class AttackerPolicy(nn.Module):
         self.critic = nn.Linear(hidden, 1)
         nn.init.orthogonal_(self.actor.weight, 0.01)
         nn.init.zeros_(self.actor.bias)
-        with torch.no_grad():                  # start near the pathfinder: FOLLOW gets ~45% initial probability
-            self.actor.bias[C.FOLLOW] = 2.0
+        with torch.no_grad():                  # 2.0 = start near the pathfinder (FOLLOW ~45% initial probability);
+            self.actor.bias[C.FOLLOW] = follow_bias   # 0 = start from uniformly random flight
 
     def forward(self, local, glob, cell, vec):
         """local (B,D,9,11,11), glob (B,8,16,16), cell (B,D), vec (B,D,10) -> logits (B,D,9), value (B,D)."""

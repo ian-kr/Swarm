@@ -27,8 +27,8 @@ COMPASS_LONG = {"N": "northern", "NE": "north-eastern", "E": "eastern", "SE": "s
 DIFFICULTIES = [
     ("scripted", "Scripted (A*)", "Classic AI: every drone flies the cheapest A* route around your known sensors."),
     ("recruit", "Recruit", "The trained swarm with very noisy decisions: it often wanders into your sensors."),
-    ("regular", "Regular", "The trained swarm with some decision noise: about as dangerous as the A* planner."),
-    ("veteran", "Veteran", "The fully trained swarm: about 40% more breaches than A* against strong defenses."),
+    ("regular", "Regular", "The trained swarm with some decision noise."),
+    ("veteran", "Veteran", "The fully trained swarm."),
 ]
 
 
@@ -44,6 +44,8 @@ class Game:
         self.euclid = self.mt.euclid.cpu().numpy()
         self.policies = {}
         self.difficulty_info = {}
+        self.timeline = []        # [(info, net)]: snapshots of the Veteran's own training run, oldest first
+        self.spec = {}
         self._load_difficulties(ckpt_dir)
         rec = ROOT / "data" / "recommended.json"
         self.recommended = json.loads(rec.read_text()) if rec.exists() else {}
@@ -53,7 +55,7 @@ class Game:
         path = ROOT / "data" / "difficulties.json"
         if not path.exists():
             return
-        spec = json.loads(path.read_text())
+        spec = self.spec = json.loads(path.read_text())
         for key, entry in spec.get("levels", {}).items():
             p = ROOT / entry["checkpoint"]
             if not p.exists():
@@ -65,14 +67,48 @@ class Game:
                 self.difficulty_info[key] = entry
             except (RuntimeError, KeyError) as e:    # e.g. a model from an older network version
                 print(f"skipping difficulty '{key}': {p} does not match the current network ({type(e).__name__})")
+        for entry in spec.get("timeline", []):
+            p = ROOT / entry["checkpoint"]
+            if not p.exists():
+                continue
+            try:
+                self.timeline.append((entry, load_policy(p, self.dev)))
+            except (RuntimeError, KeyError) as e:
+                print(f"skipping timeline stage {p} ({type(e).__name__})")
+
+    def timeline_info(self):
+        return [dict(stage=i, update=e["update"], steps=e.get("steps"), strong=e.get("strong"),
+                     random=e.get("random"), veteran=bool(e.get("veteran")))
+                for i, (e, _) in enumerate(self.timeline)]
+
+    def _policy(self, difficulty: str):
+        """'scripted' -> None; 'recruit'/'regular'/'veteran'; or 'stage:<i>' for a training-timeline snapshot."""
+        if difficulty == "scripted":
+            return None
+        if difficulty.startswith("stage:"):
+            try:
+                return self.timeline[int(difficulty[6:])][1]
+            except (ValueError, IndexError):
+                raise LayoutError(f"unknown training stage '{difficulty}'")
+        if difficulty not in self.policies:
+            raise LayoutError(f"difficulty '{difficulty}' is not available (no trained checkpoint)")
+        return self.policies[difficulty]
 
     def difficulties(self):
         out = []
         for key, label, blurb in DIFFICULTIES:
             available = key == "scripted" or key in self.policies
             info = self.difficulty_info.get(key, {})
+            ev = self.spec.get("heldout", {}).get("scripted") if key == "scripted" else info.get("eval_breach")
+            astar = self.spec.get("heldout", {}).get("scripted")
+            if key != "scripted" and ev is not None and astar:
+                # measured on the held-out strong defenses, so the claim always matches the shipped model
+                rel = round(100 * (ev / astar - 1))
+                cmp = (f"{rel}% more drones through than A*" if rel >= 5 else
+                       f"{-rel}% fewer drones through than A*" if rel <= -5 else "about as many drones through as A*")
+                blurb = f"{blurb} Against strong defenses it gets {cmp} ({round(100 * ev)}% vs {round(100 * astar)}%)."
             out.append(dict(key=key, label=label, blurb=blurb, available=available,
-                            update=info.get("update"), eval_breach=info.get("eval_breach")))
+                            update=info.get("update"), eval_breach=ev))
         return out
 
     # ----------------------------------------------------------- helpers
@@ -117,14 +153,12 @@ class Game:
     # ----------------------------------------------------------- simulate
     def simulate(self, map_id: int, layout: dict, difficulty: str, seed: int = 0, n: int | None = None) -> dict:
         layout = self.validate(map_id, layout)
-        if difficulty != "scripted" and difficulty not in self.policies:
-            raise LayoutError(f"difficulty '{difficulty}' is not available (no trained checkpoint)")
+        net = self._policy(difficulty)
         n = n or (32 if difficulty == "scripted" else 64)
         env = DefenseEnv(self.mt, n, self.dev, auto_reset=False, seed=seed)
         env.reset(map_id=map_id, layout=Layout.from_lists([layout] * n, self.dev))
         env.record_events = True
-        atk = ScriptedAttacker(self.ms) if difficulty == "scripted" else None
-        net = self.policies.get(difficulty)
+        atk = ScriptedAttacker(self.ms) if net is None else None
 
         cells = [env.drone_cell.cpu().numpy()]
         status = [env.drone_status.cpu().numpy()]
@@ -148,6 +182,7 @@ class Game:
         icell, istate = np.stack(icell), np.stack(istate)                     # (T, n, KI)
         breaches = (status[-1] == BREACHED).sum(1)
         kills = (status[-1] == KILLED).sum(1)
+        stalled = (status[-1] == ALIVE).sum(1)       # still airborne at the time limit: never committed
 
         # representative battle: breach count closest to the median
         med = np.median(breaches)
@@ -170,7 +205,9 @@ class Game:
             breach_rate=float(breaches.mean() / C.N_DRONES),
             breach_hist=np.bincount(breaches, minlength=C.N_DRONES + 1).tolist(),
             mean_kills=float(kills.mean()),
-            rep=dict(index=rep, breaches=int(breaches[rep]), kills=int(kills[rep]), frames=frames, events=events),
+            stall_rate=float(stalled.mean() / C.N_DRONES),
+            rep=dict(index=rep, breaches=int(breaches[rep]), kills=int(kills[rep]), stalled=int(stalled[rep]),
+                     frames=frames, events=events),
             debrief=debrief,
         )
         rec = self.recommended.get(str(map_id))
@@ -190,7 +227,9 @@ class Game:
 
         traffic = np.zeros(N)
         sneak = np.zeros(N)            # cells breaching drones flew through UNDETECTED
-        ever_det = det.any(0)
+        # interceptors only engage detected drones, so a kill implies detection, even when the drone was
+        # spotted and shot down within the same step (its per-step flag is cleared once it is down)
+        ever_det = det.any(0) | (final == KILLED)
         for t in range(T):
             alive_t = status[t] == ALIVE
             np.add.at(traffic, cells[t][alive_t], 1)

@@ -33,6 +33,9 @@ def has_duplicates(lay: Layout) -> torch.Tensor:
     return (s[:, 1:] == s[:, :-1]).any(1)
 
 
+STALL_PENALTY = 0.5
+
+
 def scripted_rate(ms, maps_cpu, layout: dict, map_id: int, n=32, seed=7):
     env = DefenseEnv(maps_cpu, n, "cpu", auto_reset=False, seed=seed)
     env.reset(map_id=map_id, layout=Layout.from_lists([layout] * n, "cpu"))
@@ -55,8 +58,9 @@ def main():
 
     spec = json.loads((ROOT / "data" / "difficulties.json").read_text())
     nets = {k: load_policy(ROOT / v["checkpoint"], dev) for k, v in spec["levels"].items()}
-    for net in nets.values():
+    for k, net in nets.items():
         net.amp = dev.type != "cpu"          # bf16 matmuls: far faster on AMD GPUs
+        net.temperature = float(spec["levels"][k].get("temperature", 1.0))
     target = nets["veteran"]
     ms = load_maps()
     maps = MapTensors(ms, dev)
@@ -75,8 +79,10 @@ def main():
                 fresh = helper.random_layout(torch.arange(P // 4, device=dev), mid[: P // 4])
                 lay = Layout.cat([best_lay, kids, fresh])
             m = torch.full((lay.radar_cell.shape[0],), mi, device=dev)
-            score = evaluate_layouts(target, maps, lay, m, args.seeds, dev, gen_seed=1000 * mi + g)
-            score = score + has_duplicates(lay).float()
+            breach, stall = evaluate_layouts(target, maps, lay, m, args.seeds, dev, gen_seed=1000 * mi + g, return_stall=True)
+            # A defense the swarm refuses to attack is not one a player can learn from, so prefer
+            # defenses that win by detecting and shooting drones down.
+            score = breach + STALL_PENALTY * stall + has_duplicates(lay).float()
             keep = score.argsort()[: P // 4]
             best_lay, best_score = lay.index(keep), score[keep]
             print(f"{ms.names[mi]:13s} gen {g:2d}: best {best_score[0]:.3f}  top-quarter mean {best_score.mean():.3f}")
@@ -84,13 +90,14 @@ def main():
         # re-score the top 16 with many more battles and keep the true best
         top = best_lay.index(torch.arange(16, device=dev))
         m16 = torch.full((16,), mi, device=dev)
-        fine = evaluate_layouts(target, maps, top, m16, 64, dev, gen_seed=99)
-        fine = fine + has_duplicates(top).float()
+        fb, fs = evaluate_layouts(target, maps, top, m16, 64, dev, gen_seed=99, return_stall=True)
+        fine = fb + STALL_PENALTY * fs + has_duplicates(top).float()
         i = int(fine.argmin())
         layout = top.index(torch.tensor([i], device=dev)).to_lists()[0]
         breach = {k: round(evaluate_layouts(net, maps, top.index(torch.tensor([i], device=dev)),
                                             m16[:1], 128, dev, gen_seed=5).item(), 4) for k, net in nets.items()}
         breach["scripted"] = round(scripted_rate(ms, maps_cpu, layout, mi), 4)
+        breach["veteran_stall"] = round(fs[i].item(), 4)
         out[str(mi)] = {"layout": layout, "breach": breach}
         print(f"  -> {layout}  {breach}")
 

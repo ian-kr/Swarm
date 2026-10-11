@@ -109,3 +109,35 @@ def test_threat_field_routes_around_radar():
     threat = env.threat_field(torch.tensor([5]), env.coverage, env.jam_zone, env.pad_zone)
     assert (threat >= plain - 1e-4).all()
     assert (threat - plain).max() > 4.0       # detours (or penalties) appear behind the radar
+
+
+def test_stall_rate_counts_drones_that_never_commit():
+    """With no defenses, a policy that only hovers can neither break through nor be shot down: every drone stalls."""
+    from redcell.search import evaluate_layouts
+
+    class Hover:
+        def act_env(self, obs):
+            B, D = obs["cell"].shape
+            return torch.full((B, D), C.MOVES.index((0, 0))), None, None
+
+    m = torch.arange(8) % MS.n
+    lay = Layout.from_lists([{"radar": [], "jammer": [], "pad": []}] * 8, "cpu")
+    breach, stall = evaluate_layouts(Hover(), MT, lay, m, 2, "cpu", return_stall=True)
+    assert (breach == 0).all()
+    assert torch.allclose(stall, torch.ones_like(stall))
+
+
+def test_timeout_costs_more_than_being_shot_down():
+    # otherwise loitering until the time limit is as good as a failed attack, and the swarm learns to hide
+    assert C.R_TIMEOUT < C.R_KILLED < 0
+
+
+def test_game_reports_stall_and_rejects_unknown_stage():
+    import pytest
+    from redcell.game import Game, LayoutError
+
+    g = Game()
+    r = g.simulate(0, {"radar": [], "jammer": [], "pad": []}, "scripted", seed=1, n=4)
+    assert 0.0 <= r["stall_rate"] <= 1.0 and r["rep"]["stalled"] >= 0
+    with pytest.raises(LayoutError):
+        g.simulate(0, {}, f"stage:{len(g.timeline)}", n=2)

@@ -1,14 +1,15 @@
 """Drive the web UI end to end in headless Chromium and save screenshots.
 
-    python tests/e2e_ui.py OUT_DIR [difficulty]   (server must be running on :8000)
+    python tests/e2e_ui.py OUT_DIR [difficulty]   (server must be running on :8000, or set RC_URL)
 """
+import os
 import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 out = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
-url = "http://localhost:8000/"
+url = os.environ.get("RC_URL", "http://localhost:8000/")
 errors = []
 
 with sync_playwright() as p:
@@ -59,6 +60,15 @@ with sync_playwright() as p:
     pg.wait_for_function("window.__rc.scene.pathGroup.children.length > 2", timeout=60000)
     pg.wait_for_timeout(500)
     pg.screenshot(path=out / "4_astar.png")
+    if pg.evaluate("(window.__rc.S.cfg.timeline || []).length > 1"):
+        pg.click("#btn-learn")
+        pg.wait_for_selector("body[data-learning]", timeout=120000)
+        pg.wait_for_timeout(2500)
+        pg.screenshot(path=out / "6_timelapse.png")
+        pg.wait_for_selector("#panel-right:not([hidden])", timeout=240000)
+        pg.wait_for_timeout(1200)
+        print("timelapse stages:", pg.evaluate("window.__rc.S.learn.stages.map(r => r.breach_rate)"))
+        pg.screenshot(path=out / "7_stages.png")
     pg.click("#btn-hood")
     pg.wait_for_timeout(1200)
     pg.screenshot(path=out / "5_hood.png")

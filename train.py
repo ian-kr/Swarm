@@ -81,6 +81,10 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "checkpoints"))
     ap.add_argument("--resume", default=None)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--follow-bias", type=float, default=2.0,
+                    help="initial logit bonus for the follow-the-pathfinder action (0 = start from random flight)")
+    ap.add_argument("--stall-weight", type=float, default=0.5,
+                    help="blue-team pool priority for defenses where the swarm loiters until timeout")
     ap.add_argument("--team-reward", type=float, default=0.0, help="bonus to each flying drone when a teammate breaches")
     ap.add_argument("--no-strong-eval", action="store_true", help="skip the strong-defense benchmark (needs ~2 min of CPU A* at start)")
     ap.add_argument("--mine-every", type=int, default=10, help="run a blue-team search generation every N updates (0 = off)")
@@ -115,8 +119,9 @@ def main():
         s_map, s_lay, s_astar = build_strong_set(ms_cpu, MapTensors(ms_cpu, "cpu"))
         strong = (s_map.to(dev), Layout(*(getattr(s_lay, f).to(dev) for f in Layout.FIELDS)))
         print(f"strong benchmark: {s_map.numel()} layouts, scripted A* breach {s_astar:.3f}")
-    pool = BluePool(maps, dev, size=args.pool_size, chunk=args.mine_chunk, target=args.pool_target)
-    net = AttackerPolicy(args.hidden, amp=args.amp).to(dev)
+    pool = BluePool(maps, dev, size=args.pool_size, chunk=args.mine_chunk, target=args.pool_target,
+                    stall_weight=args.stall_weight)
+    net = AttackerPolicy(args.hidden, amp=args.amp, follow_bias=args.follow_bias).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr, eps=1e-5)
     start = 0
     metrics_path = out / "metrics.jsonl"
@@ -147,6 +152,7 @@ def main():
     }
 
     ep_breach, ep_kill, ep_count = 0.0, 0.0, 0
+    ep_stall = 0.0
     t_start = time.time()
     total_steps = 0
     obs = obs0
@@ -171,6 +177,7 @@ def main():
             if ed.any():
                 ep_breach += (info["breaches"][ed].float() / Dn).sum().item()
                 ep_kill += (info["kills"][ed].float() / Dn).sum().item()
+                ep_stall += ((Dn - info["breaches"][ed] - info["kills"][ed]).float() / Dn).sum().item()
                 ep_count += int(ed.sum())
             obs = env.observe()
         total_steps += T * B
@@ -245,28 +252,31 @@ def main():
             "sps": round(total_steps / elapsed),
             "train_breach": round(ep_breach / max(ep_count, 1), 4),
             "train_kill": round(ep_kill / max(ep_count, 1), 4),
+            "train_stall": round(ep_stall / max(ep_count, 1), 4),
             "episodes": ep_count,
             "reward_per_step": round(buf["rew"][buf["valid"]].mean().item(), 4),
             **{k: round(v / nb, 4) for k, v in stats.items()},
             **mine,
         }
         ep_breach, ep_kill, ep_count = 0.0, 0.0, 0
+        ep_stall = 0.0
         if update % args.eval_every == 0 or update == start + 1:
             net.eval()
             rec["eval_breach"], per_map = evaluate(net, maps, dev)
             rec["eval_breach_per_map"] = [round(x, 3) for x in per_map]
             if strong is not None:
-                rec["strong_breach"] = round(evaluate_layouts(net, maps, strong[1], strong[0], 4, dev, gen_seed=77).mean().item(), 4)
+                sb, ss = evaluate_layouts(net, maps, strong[1], strong[0], 4, dev, gen_seed=77, return_stall=True)
+                rec["strong_breach"], rec["strong_stall"] = round(sb.mean().item(), 4), round(ss.mean().item(), 4)
         with open(metrics_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        print(f"[{update:4d}] breach {rec['train_breach']:.3f} eval {rec.get('eval_breach', float('nan')):.3f} "
-              f"strong {rec.get('strong_breach', float('nan')):.3f} ent {rec['ent']:.2f} kl {rec['kl']:.4f} vf {rec['vf']:.3f} {rec['sps']} steps/s"
-              + (f" | blue pool breach {mine['pool_breach']:.3f} (fresh {mine['fresh_breach']:.3f})" if mine else ""))
+        print(f"[{update:4d}] breach {rec['train_breach']:.3f} stall {rec['train_stall']:.3f} eval {rec.get('eval_breach', float('nan')):.3f} "
+              f"strong {rec.get('strong_breach', float('nan')):.3f}/{rec.get('strong_stall', float('nan')):.3f} ent {rec['ent']:.2f} kl {rec['kl']:.4f} vf {rec['vf']:.3f} {rec['sps']} steps/s"
+              + (f" | blue pool breach {mine['pool_breach']:.3f} stall {mine['pool_stall']:.3f} (fresh {mine['fresh_breach']:.3f})" if mine else ""))
 
         early = update <= 30 and update % 2 == 0          # learning is fastest early: finer snapshots for Recruit
         if early or update % args.save_every == 0 or update == start + 1 or update == start + args.updates:
             torch.save({"model": net.state_dict(), "opt": opt.state_dict(), "update": update,
-                        "hidden": args.hidden, "metrics": rec, "pool": pool.state_dict(), "device": describe_device(dev)},
+                        "hidden": args.hidden, "follow_bias": args.follow_bias, "metrics": rec, "pool": pool.state_dict(), "device": describe_device(dev)},
                        out / f"ckpt_{update:05d}.pt")
 
 
