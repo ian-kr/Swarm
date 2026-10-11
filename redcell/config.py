@@ -25,6 +25,9 @@ INTERCEPTORS_PER_PAD = 3
 INTERCEPTOR_SPEED = 2     # cells per step (drones move 1)
 INTERCEPTOR_FUEL = 30     # steps of flight before it is spent
 KILL_PROB = 0.8
+INTERCEPT_TEWA = 1.0      # weight of a drone's closeness to the base when picking targets (0 = nearest drone first)
+INTERCEPT_LEAD_MAX = 2    # lead pursuit: aim up to this many of the target's moves ahead (0 = pure pursuit)
+INTERCEPT_TERMINAL = 3    # within this many cells, home straight onto the drone (terminal guidance)
 JAM_DRIFT_PROB = 0.5      # chance a jammed drone's move is replaced by a random one
 
 # --- terrain ---------------------------------------------------------------

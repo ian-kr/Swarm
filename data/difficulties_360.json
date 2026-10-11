@@ -3,189 +3,189 @@
   "metrics": "data/training_metrics_360.jsonl",
   "device": "AMD Radeon Pro W7900D (ROCm/HIP 7.15.26333)",
   "benchmark": "strong",
-  "strong_layouts": 212,
-  "scripted_eval_breach": 0.2915,
-  "scripted_random_breach": 0.7819,
+  "strong_layouts": 227,
+  "scripted_eval_breach": 0.2731,
+  "scripted_random_breach": 0.765,
   "heldout": {
-    "layouts": 245,
-    "veteran": 0.567,
-    "veteran_stall": 0.0734,
-    "scripted": 0.2662
+    "layouts": 252,
+    "veteran": 0.6173,
+    "veteran_stall": 0.083,
+    "scripted": 0.2495
   },
   "curve": [
     [
       1,
-      0.1405,
-      0.2096,
-      0.4486
+      0.1577,
+      0.223,
+      0.4605
     ],
     [
       2,
-      0.281,
-      0.4479,
-      0.1964
+      0.3069,
+      0.4857,
+      0.1955
     ],
     [
       4,
-      0.2812,
-      0.6169,
-      0.0107
+      0.3085,
+      0.6279,
+      0.0104
     ],
     [
       6,
-      0.2557,
-      0.6455,
-      0.0007
+      0.2879,
+      0.6517,
+      0.0013
     ],
     [
       8,
-      0.3063,
-      0.6852,
-      0.0005
+      0.3263,
+      0.6816,
+      0.0006
     ],
     [
       10,
-      0.3522,
-      0.7285,
-      0.0003
+      0.3792,
+      0.7161,
+      0.0002
     ],
     [
       12,
-      0.3902,
-      0.7516,
+      0.429,
+      0.752,
       0.0004
     ],
     [
       14,
-      0.4536,
-      0.7669,
-      0.0027
+      0.5086,
+      0.777,
+      0.0029
     ],
     [
       16,
-      0.5362,
-      0.7982,
-      0.0183
+      0.5993,
+      0.8018,
+      0.0177
     ],
     [
       18,
-      0.5794,
-      0.8148,
-      0.0691
+      0.6274,
+      0.8258,
+      0.0791
     ],
     [
       20,
-      0.534,
-      0.8122,
-      0.133
+      0.5696,
+      0.8301,
+      0.1662
     ],
     [
       22,
-      0.4972,
-      0.8213,
-      0.1367
+      0.5252,
+      0.8294,
+      0.1951
     ],
     [
       24,
-      0.4813,
-      0.8356,
-      0.0802
+      0.5141,
+      0.8184,
+      0.1676
     ],
     [
       26,
-      0.4772,
-      0.8239,
-      0.042
+      0.5001,
+      0.8353,
+      0.1205
     ],
     [
       28,
-      0.4638,
-      0.8167,
-      0.0601
+      0.4882,
+      0.8216,
+      0.0705
     ],
     [
       30,
-      0.4657,
-      0.8184,
-      0.0645
+      0.4854,
+      0.8239,
+      0.0571
     ],
     [
       40,
-      0.4827,
-      0.8395,
-      0.0446
+      0.4819,
+      0.8161,
+      0.0298
     ],
     [
       50,
-      0.4845,
-      0.8229,
-      0.0617
+      0.4779,
+      0.8311,
+      0.0317
     ],
     [
       60,
-      0.4689,
-      0.8324,
-      0.0702
+      0.5145,
+      0.8298,
+      0.0501
     ],
     [
       70,
-      0.4901,
-      0.832,
-      0.0462
+      0.5307,
+      0.8424,
+      0.0333
     ],
     [
       80,
-      0.4615,
-      0.8304,
-      0.0678
+      0.5218,
+      0.8467,
+      0.046
     ],
     [
       90,
-      0.4766,
-      0.8337,
-      0.0426
+      0.5135,
+      0.8398,
+      0.0509
     ],
     [
       100,
-      0.5175,
-      0.8392,
-      0.0412
+      0.4918,
+      0.8372,
+      0.049
     ],
     [
       110,
-      0.5209,
-      0.8467,
-      0.0446
+      0.4988,
+      0.8337,
+      0.0422
     ],
     [
       120,
-      0.511,
-      0.8438,
-      0.0458
+      0.4968,
+      0.846,
+      0.0478
     ],
     [
       130,
-      0.4994,
-      0.8509,
-      0.0395
+      0.5044,
+      0.8444,
+      0.0487
     ],
     [
       140,
-      0.4875,
-      0.8464,
-      0.0442
+      0.4892,
+      0.8249,
+      0.0459
     ],
     [
       150,
-      0.5094,
-      0.8532,
-      0.0439
+      0.5115,
+      0.8486,
+      0.0316
     ],
     [
       160,
-      0.5099,
-      0.8447,
-      0.0344
+      0.5133,
+      0.8473,
+      0.0333
     ]
   ],
   "levels": {
@@ -193,76 +193,76 @@
       "checkpoint": "models/360/veteran.pt",
       "update": 18,
       "temperature": 1.0,
-      "eval_breach": 0.567,
-      "stall": 0.0734,
-      "random_breach": 0.8223
+      "eval_breach": 0.6173,
+      "stall": 0.083,
+      "random_breach": 0.8298
     },
     "regular": {
       "checkpoint": "models/360/veteran.pt",
       "update": 18,
       "temperature": 2.0,
-      "eval_breach": 0.4276,
-      "stall": 0.3034,
-      "random_breach": 0.7305
+      "eval_breach": 0.4282,
+      "stall": 0.3511,
+      "random_breach": 0.7422
     },
     "recruit": {
       "checkpoint": "models/360/veteran.pt",
       "update": 18,
       "temperature": 3.0,
-      "eval_breach": 0.3283,
-      "stall": 0.4041,
-      "random_breach": 0.6162
+      "eval_breach": 0.3224,
+      "stall": 0.4557,
+      "random_breach": 0.612
     }
   },
-  "levels_note": "Measured on the held-out strong set (245 layouts, 24 battles each). Recruit/Regular = Veteran with noisier decisions.",
+  "levels_note": "Measured on the held-out strong set (252 layouts, 24 battles each). Recruit/Regular = Veteran with noisier decisions.",
   "timeline": [
     {
       "update": 1,
       "checkpoint": "models/360/timeline/update_00001.pt",
       "steps": 262144,
-      "strong": 0.1405,
-      "random": 0.2096,
-      "stall": 0.4486,
+      "strong": 0.1577,
+      "random": 0.223,
+      "stall": 0.4605,
       "veteran": false
     },
     {
       "update": 2,
       "checkpoint": "models/360/timeline/update_00002.pt",
       "steps": 524288,
-      "strong": 0.281,
-      "random": 0.4479,
-      "stall": 0.1964,
+      "strong": 0.3069,
+      "random": 0.4857,
+      "stall": 0.1955,
       "veteran": false
     },
     {
       "update": 4,
       "checkpoint": "models/360/timeline/update_00004.pt",
       "steps": 1048576,
-      "strong": 0.2812,
-      "random": 0.6169,
-      "stall": 0.0107,
+      "strong": 0.3085,
+      "random": 0.6279,
+      "stall": 0.0104,
       "veteran": false
     },
     {
       "update": 8,
       "checkpoint": "models/360/timeline/update_00008.pt",
       "steps": 2097152,
-      "strong": 0.3063,
-      "random": 0.6852,
-      "stall": 0.0005,
+      "strong": 0.3263,
+      "random": 0.6816,
+      "stall": 0.0006,
       "veteran": false
     },
     {
       "update": 18,
       "checkpoint": "models/360/timeline/update_00018.pt",
       "steps": 4718592,
-      "strong": 0.5794,
-      "random": 0.8148,
-      "stall": 0.0691,
+      "strong": 0.6274,
+      "random": 0.8258,
+      "stall": 0.0791,
       "veteran": true
     }
   ],
   "runs": [
-    "amd_360"
+    "amd_v4_360"
   ]
 }

@@ -2,128 +2,128 @@
   "0": {
     "layout": {
       "radar": [
-        818,
-        520
+        776,
+        825
       ],
       "jammer": [],
       "pad": [
-        998,
-        735,
-        987
+        657,
+        490,
+        606
       ]
     },
     "breach": {
-      "veteran": 0.0208,
-      "regular": 0.0443,
-      "recruit": 0.0195,
-      "scripted": 0.0,
+      "veteran": 0.0221,
+      "regular": 0.0169,
+      "recruit": 0.0104,
+      "scripted": 0.0208,
       "veteran_stall": 0.0
     }
   },
   "1": {
     "layout": {
       "radar": [
-        945
+        946
       ],
       "jammer": [
         787
       ],
       "pad": [
-        1013,
-        651,
-        719
+        950,
+        716,
+        750
       ]
     },
     "breach": {
-      "veteran": 0.0312,
-      "regular": 0.0208,
-      "recruit": 0.0065,
-      "scripted": 0.0104,
-      "veteran_stall": 0.0
+      "veteran": 0.0143,
+      "regular": 0.0234,
+      "recruit": 0.0013,
+      "scripted": 0.0156,
+      "veteran_stall": 0.0052
     }
   },
   "2": {
     "layout": {
       "radar": [
-        817,
-        550
+        977,
+        571
       ],
       "jammer": [],
       "pad": [
-        976,
-        909,
-        783
+        690,
+        720,
+        788
       ]
     },
     "breach": {
-      "veteran": 0.0299,
-      "regular": 0.013,
-      "recruit": 0.0091,
-      "scripted": 0.0052,
-      "veteran_stall": 0.0156
+      "veteran": 0.0195,
+      "regular": 0.0273,
+      "recruit": 0.0182,
+      "scripted": 0.0312,
+      "veteran_stall": 0.0026
     }
   },
   "3": {
     "layout": {
       "radar": [
-        426,
-        818
+        686
       ],
-      "jammer": [],
+      "jammer": [
+        750
+      ],
       "pad": [
-        588,
-        718,
-        470
+        627,
+        594,
+        661
       ]
     },
     "breach": {
       "veteran": 0.026,
-      "regular": 0.0938,
-      "recruit": 0.2578,
-      "scripted": 0.0469,
+      "regular": 0.0729,
+      "recruit": 0.0951,
+      "scripted": 0.0156,
       "veteran_stall": 0.0
     }
   },
   "4": {
     "layout": {
       "radar": [
-        684
+        622,
+        343
       ],
-      "jammer": [
-        815
-      ],
+      "jammer": [],
       "pad": [
-        945,
-        915,
-        851
+        498,
+        374,
+        688
       ]
     },
     "breach": {
-      "veteran": 0.0247,
-      "regular": 0.0104,
-      "recruit": 0.0117,
+      "veteran": 0.0013,
+      "regular": 0.0091,
+      "recruit": 0.0013,
       "scripted": 0.0156,
-      "veteran_stall": 0.0
+      "veteran_stall": 0.0156
     }
   },
   "5": {
     "layout": {
       "radar": [
-        806,
-        762
+        902,
+        717
       ],
       "jammer": [],
       "pad": [
-        785,
-        751,
-        697
+        885,
+        694,
+        954
       ]
     },
     "breach": {
-      "veteran": 0.0117,
-      "regular": 0.0052,
-      "recruit": 0.0,
-      "scripted": 0.0104,
+      "veteran": 0.0182,
+      "regular": 0.0104,
+      "recruit": 0.0039,
+      "scripted": 0.0156,
       "veteran_stall": 0.0
     }
   }

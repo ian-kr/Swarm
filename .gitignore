@@ -6,3 +6,4 @@ data/maps_360.npz
 checkpoints/
 .server.pid
 .server.log
+DEMO.md

@@ -191,3 +191,33 @@ def test_network_view_reproduces_the_replayed_battle():
 def test_north_theater_unchanged():
     assert MS.mode == "north" and MS.names[0] == "Ridgeback"
     assert (np.arange(C.N_CELLS)[MS.spawn_mask[0]] // C.GRID < C.SPAWN_ROWS).all()
+
+
+def test_interceptor_prefers_the_drone_nearest_the_base_and_leads_its_target():
+    """Threat evaluation: of two tracked drones, a free interceptor goes for the one closer to the base,
+    even if the other is nearer to the interceptor. Lead pursuit: it aims ahead of a moving target."""
+    from redcell.env import FLYING
+    mi = 5                                              # Flatlands: open ground
+    G = C.GRID
+    base = int(MS.base_cell[mi])
+    bx, by = base % G, base // G
+    pad = (by - 6) * G + bx
+    env = DefenseEnv(MT, 1, "cpu", auto_reset=False, seed=0)
+    env.reset(map_id=torch.tensor([mi]), layout=Layout.from_lists([{"radar": [], "jammer": [], "pad": [pad]}], "cpu"))
+    near_pad = (by - 12) * G + bx                       # 6 cells from the pad, 12 from the base
+    near_base = (by - 3) * G + bx + 6                   # farther from the pad, much closer to the base
+    cells = torch.tensor([[near_pad, near_base] + [0] * (C.N_DRONES - 2)])
+    env.drone_cell[:] = cells
+    env.prev_cell[:] = cells
+    env.prev_cell[0, 1] = near_base + 1                 # drone 1 is moving west, one cell per step
+    env.drone_status[:] = 0
+    env.drone_status[0, 2:] = 1                         # only drones 0 and 1 are in play
+    env.detected[:] = False
+    env.detected[0, :2] = True
+    env._interceptors()
+    flying = (env.int_state[0] == FLYING).nonzero().squeeze(1)
+    assert flying.numel() >= 1
+    first = int(flying[0])
+    assert int(env.int_target[0, first]) == 1, "should engage the drone closer to the base first"
+    goal = int(env.int_goal[0, first])
+    assert goal % G < (near_base % G), "should aim west of the drone, where it is heading"

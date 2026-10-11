@@ -12,37 +12,43 @@ Built for the **Full Sail "Pathways & Perception" serious games & simulation cha
 
 ## Results (AMD Radeon Pro W7900D, ROCm)
 
-Trained from scratch (random initial flight) for 16 minutes: 252M drone decisions at ≈267K/s. Measured on **197
+Trained from scratch (random initial flight) for 17 minutes: 252M drone decisions at ≈251K/s. Measured on **205
 held-out strong defenses** (layouts the scripted A\* attacker mostly fails against, never used for training or
 checkpoint selection), 24 battles each:
 
 | Attacker | Breach rate vs. strong defenses | Drones that never committed | vs. random defenses |
 |---|---|---|---|
-| Scripted A\* | 22.6% | | 78.5% |
-| **Veteran (learned)** | **26.1%** (+15%) | 6.1% | 80.3% |
-| Regular (Veteran, noisier decisions) | 21.7% | 17.6% | 76.6% |
-| Recruit (Veteran, very noisy decisions) | 11.9% | 39.9% | 67.5% |
+| Scripted A\* | 21.4% | | 78.0% |
+| **Veteran (learned)** | **29.2%** (+36%) | 5.5% | 81.0% |
+| Regular (Veteran, noisier decisions) | 25.8% | 12.8% | 76.7% |
+| Recruit (Veteran, very noisy decisions) | 15.0% | 34.8% | 67.7% |
 
-The swarm went from random flight (2% vs. strong defenses) to A\*-level by update 10 (16M decisions), then kept
-improving slowly; update 120 is the Veteran. How it differs from A\* against strong defenses
-(`scripts/behavior_report.py`): it spends 4% of its flight detected vs 10%, takes 74 steps to break through vs 29
-because it waits for openings (13% of its moves are hovers), spreads its attacks over 126 cells per battle vs 65
-(harder to predict), and follows the pathfinder on 36% of its moves, improvising the rest.
+The swarm went from random flight (2% vs. strong defenses) to A\*-level by update 6 (9M decisions), then kept
+improving slowly; update 130 is the Veteran. How it differs from A\* against strong defenses
+(`scripts/behavior_report.py`): it spends 4% of its flight detected vs 11%, takes 70 steps to break through vs 30
+because it waits for openings (10% of its moves are hovers), spreads its attacks over 116 cells per battle vs 66
+(harder to predict), and follows the pathfinder on 43% of its moves, improvising the rest.
 
-**360° theater** (separate swarm, same pipeline and settings, 16 minutes from random flight), on 245 held-out strong
+**360° theater** (separate swarm, same pipeline and settings, 16 minutes from random flight), on 252 held-out strong
 360° defenses, 24 battles each:
 
 | Attacker | Breach rate vs. strong defenses | Drones that never committed | vs. random defenses |
 |---|---|---|---|
-| Scripted A\* | 26.6% | | |
-| **Veteran (learned)** | **56.7%** (2.1×) | 7.3% | 82.2% |
-| Regular | 42.8% | 30.3% | 73.0% |
-| Recruit | 32.8% | 40.4% | 61.6% |
+| Scripted A\* | 25.0% | | 76.5% |
+| **Veteran (learned)** | **61.7%** (2.5×) | 8.3% | 83.0% |
+| Regular | 42.8% | 35.1% | 74.2% |
+| Recruit | 32.2% | 45.6% | 61.2% |
 
-With every edge open, choosing *where* to attack matters more, and the learned swarm's lead over A\* more than
-doubles. It went from 14% to 58% on the strong benchmark in 18 updates.
+With every edge open, choosing *where* to attack matters more, and the learned swarm's lead over A\* is about
+two and a half times. It went from 16% to 63% on the strong benchmark in 18 updates.
 
-Our first Veteran scored higher on paper (31.5% on the same held-out set) but 12% of its drones never attacked, and
+All numbers above are against the upgraded interceptors (threat-based targeting and lead pursuit, see the table
+below). Both swarms were retrained against them. Compared with the previous run (each measured on its own held-out set,
+which is rebuilt from the current interceptors), A\* lost ground (22.6% → 21.4% north, 26.6% → 25.0% 360°) while
+the retrained swarms gained (26.1% → 29.2%, 56.7% → 61.7%): the learned enemy adapts to a smarter defense, the
+fixed pathfinder cannot.
+
+Our first Veteran scored higher on paper (31.5% on its held-out set, against the earlier interceptors) but 12% of its drones never attacked, and
 against the strongest defenses none did. The fix (below) traded some headline breach rate for an enemy that always
 commits.
 
@@ -87,7 +93,7 @@ Switch with **Threat axis** above the enemy list. Each theater has its own maps 
 
 | Where | Algorithm | Why it matters |
 |---|---|---|
-| Interceptors chasing drones | All-pairs **Dijkstra** next-hop tables (precomputed per map) | Lets 4,096 battles route interceptors in parallel on the GPU with one tensor lookup |
+| Interceptors chasing drones | All-pairs **Dijkstra** next-hop tables (precomputed per map), aimed by **lead pursuit** | Lets 4,096 battles route interceptors in parallel on the GPU with one tensor lookup. Each interceptor aims where its target is heading (up to 2 moves ahead, straight homing within 3 cells) and picks targets by **threat evaluation**: the tracked drone closest to the base, weighed against its own flight distance, skipping drones beyond its fuel |
 | Scripted enemy | **Threat-aware A\***: cost = distance + penalties for radar coverage, jammer and interceptor zones; replans when jamming knocks a drone off course | The classic game-AI opponent, and the baseline the learned swarm is compared against |
 | Debrief "A\* planner view" | A\* with its explored-node trace | Shows how a textbook planner would route around *your* defense vs. the plain shortest path |
 | Learned swarm's senses | **Threat-aware distance field**: the same cost model as A\*, solved for every cell of every battle at once by parallel Bellman-Ford relaxation on the GPU | Each drone *sees* a pathfinding field, so the swarm starts from A\*-quality routes and learns tactics on top: timing, splitting up, dodging interceptors, riding jamming drift |

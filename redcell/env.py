@@ -151,6 +151,7 @@ class DefenseEnv:
         self.map_id = z(B)
         self.t = z(B)
         self.drone_cell = z(B, D)
+        self.prev_cell = z(B, D)
         self.drone_status = z(B, D)
         self.detected = z(B, D, dt=torch.bool)
         self.jammed = z(B, D, dt=torch.bool)
@@ -257,6 +258,7 @@ class DefenseEnv:
         # drones enter along the northern edge
         sw = self.m.spawn_mask[map_id].float()
         self.drone_cell[idx] = torch.multinomial(sw, D, replacement=False, generator=self.gen)
+        self.prev_cell[idx] = self.drone_cell[idx]
         self.drone_status[idx] = ALIVE
         self.detected[idx] = False
         self.jammed[idx] = False
@@ -350,6 +352,7 @@ class DefenseEnv:
         actions = torch.where(drift, rnd, actions)
 
         # 2. move
+        self.prev_cell = self.drone_cell.clone()      # for the interceptors' lead pursuit
         tgt = m.move[self.drone_cell, actions]
         ok = (tgt >= 0) & m.passable[mid, tgt.clamp(min=0)] & active
         self.drone_cell = torch.where(ok, tgt, self.drone_cell)
@@ -404,8 +407,10 @@ class DefenseEnv:
         tracked = alive & self.detected
         INF = 1e6
 
-        # assignment: each free interceptor takes the nearest tracked drone,
-        # preferring drones nobody is already chasing
+        # assignment (threat evaluation and weapon assignment): each free interceptor takes the tracked drone
+        # that is most urgent, i.e. closest to the base along its flight path, weighted by how far the
+        # interceptor has to fly to reach it; drones it cannot reach on its fuel are skipped, and drones
+        # nobody is already chasing are preferred
         flying = self.int_state == FLYING
         tgt_alive = alive[b1[:, None], self.int_target]
         chasing = torch.zeros(B, D, device=dev)
@@ -416,17 +421,30 @@ class DefenseEnv:
             if not need.any():
                 continue
             dd = m.dist[mid[:, None], self.drone_cell, self.int_cell[:, k:k + 1]]   # (B, D)
-            score = torch.where(tracked, dd + 100.0 * chasing, torch.full_like(dd, INF))
+            urgency = m.dist_to_base[mid[:, None], self.drone_cell]                    # flight distance to the base
+            reach = dd <= C.INTERCEPTOR_SPEED * self.int_fuel[:, k:k + 1]
+            score = torch.where(tracked & reach, C.INTERCEPT_TEWA * urgency + (1 - 0.5 * min(C.INTERCEPT_TEWA, 1)) * dd + 100.0 * chasing,
+                                torch.full_like(dd, INF))
             best = score.argmin(1)
             has = need & (score.min(1).values < INF)
             self.int_target[:, k] = torch.where(has, best, self.int_target[:, k])
             self.int_state[:, k] = torch.where(has, FLYING, st)
             chasing[b1[has], best[has]] += 1
 
-        # update goal: chase the drone while it is tracked, else head for its last known cell
+        # update goal (lead pursuit): aim where the tracked drone will be by the time the interceptor
+        # gets there, extrapolating its last move; fall back to its current cell if that point is not
+        # flyable. A drone that drops off radar is hunted at its last known cell.
         tcell = self.drone_cell[b1[:, None], self.int_target]                 # (B, KI)
         ttracked = tracked[b1[:, None], self.int_target]
-        self.int_goal = torch.where(ttracked, tcell, self.int_goal)
+        txy = m.xy[tcell]
+        vel = txy - m.xy[self.prev_cell[b1[:, None], self.int_target]]
+        gap = m.dist[mid[:, None], tcell, self.int_cell]
+        lead = (gap / (C.INTERCEPTOR_SPEED + 1)).round().clamp(0, C.INTERCEPT_LEAD_MAX)
+        lead = torch.where(gap <= C.INTERCEPT_TERMINAL, torch.zeros_like(lead), lead)
+        pxy = (txy + vel * lead[..., None].long()).clamp(0, G - 1)
+        pcell = pxy[..., 1] * G + pxy[..., 0]
+        pcell = torch.where(m.passable[mid[:, None], pcell], pcell, tcell)
+        self.int_goal = torch.where(ttracked, pcell, self.int_goal)
 
         flying = self.int_state == FLYING
         for _ in range(C.INTERCEPTOR_SPEED):

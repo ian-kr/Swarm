@@ -255,7 +255,7 @@
             <li><b>PPO.</b> One shared policy network flies every drone. Rewards for progress and breaching, penalties for being shot down and a larger one for loitering until time runs out. Each drone can also choose <em>follow the pathfinder</em>, so it learns when to trust A*-style routing and when to improvise.</li>
             <li><b>Arms race.</b> A genetic search keeps finding defenses the current swarm can barely beat, or refuses to attack, and the swarm trains against them.</li>
             <li><b>Difficulty.</b> Veteran is the best checkpoint on strong defenses. Regular and Recruit fly the same network with noisier decisions.</li>
-            <li><b>Interceptors</b> chase tracked drones along Dijkstra next-hop tables. The <b>Scripted</b> enemy uses threat-aware A*.</li>
+            <li><b>Interceptors</b> pick targets by threat (the tracked drone closest to the base, weighed against how far they must fly), aim where the drone is heading (lead pursuit, then straight homing in the last 3 cells), and fly along Dijkstra next-hop tables. The <b>Scripted</b> enemy uses threat-aware A*.</li>
           </ol>
         </div>
       </div>
