@@ -38,15 +38,56 @@
         <button class="link" id="btn-help">Briefing</button>
         <button class="link" id="btn-hood">How it was trained</button>
         <button class="link" id="btn-view">Reset view</button>
+        <button class="link" id="btn-sound" aria-pressed="true">Sound on</button>
       </nav>
 
       <aside class="opfor" id="opfor">
+        <div class="kicker">Threat axis</div>
+        <div class="axis" id="seg-mode" role="radiogroup" aria-label="Threat axis"></div>
         <div class="kicker">Opposing force</div>
         <div class="opfor-list" id="seg-diff" role="radiogroup" aria-label="Enemy"></div>
         <p class="opfor-blurb" id="diff-blurb"></p>
       </aside>
 
       <div class="log" id="feed" aria-live="polite"></div>
+
+      <aside class="mind" id="mind" hidden aria-live="off">
+        <div class="mind-head">
+          <span class="kicker">What it's thinking</span>
+          <span><button class="link mind-close" id="mind-net" title="Show this drone's whole neural network (N)">Open network</button>
+          <button class="link mind-close" id="mind-close" aria-label="Close">Close</button></span>
+        </div>
+        <div class="mind-title"><b id="mind-who">UAV-1</b><span id="mind-state"></span></div>
+        <div class="mind-body" id="mind-net">
+          <svg class="rose" id="mind-rose" viewBox="-64 -64 128 128" aria-label="Move probabilities by direction"></svg>
+          <div class="mind-side">
+            <div class="mrow"><span>Follow pathfinder</span><b id="mind-follow">0%</b></div>
+            <div class="mbar gold"><i id="mind-follow-bar"></i></div>
+            <div class="mrow"><span>Hover and wait</span><b id="mind-hover">0%</b></div>
+            <div class="mbar"><i id="mind-hover-bar"></i></div>
+            <div class="mrow" title="The network's value estimate: its own forecast of whether this drone gets through"><span>Forecast</span><b id="mind-value"></b></div>
+            <div class="mbar value"><i id="mind-value-bar"></i></div>
+          </div>
+        </div>
+        <p class="mind-say" id="mind-say"></p>
+        <div class="mind-key"><span><i class="k-red"></i>own move</span><span><i class="k-gold"></i>pathfinder</span><span><i class="k-white"></i>chosen</span></div>
+      </aside>
+      <section class="net" id="net" hidden aria-label="Neural network view">
+        <div class="net-head">
+          <span class="kicker">Neural network</span>
+          <b id="net-who">UAV-1</b>
+          <span class="net-meta" id="net-meta"></span>
+          <label class="net-opt"><input type="checkbox" id="net-att" checked>Attention on map</label>
+          <button class="link" id="net-close">Close</button>
+        </div>
+        <canvas id="net-canvas"></canvas>
+        <div class="net-foot">
+          <span class="net-why" id="net-why"></span>
+          <span class="net-legend"><i class="lg-heat"></i>neuron firing <i class="lg-pos"></i>pushed for this move <i class="lg-neg"></i>pushed against <i class="lg-att"></i>attention</span>
+        </div>
+        <div class="net-loading" id="net-loading" hidden>Re-running this exact battle to look inside the network...</div>
+      </section>
+      <div class="mind-hint" id="mind-hint" hidden>Click a drone or its diamond below to see what its network is thinking</div>
       <div class="caption" id="caption" hidden></div>
 
       <div class="legend" id="legend">
@@ -67,7 +108,7 @@
       <article class="report paper" id="panel-right" hidden>
         <header class="doc-head">
           <div class="doc-class">Unclassified // Training</div>
-          <div class="doc-meta"><span>After-action report</span><span class="mono" id="db-dtg"></span></div>
+          <div class="doc-meta"><span id="db-kind">After-action report</span><span class="mono" id="db-dtg"></span></div>
           <h2 id="db-title">Debrief</h2>
           <div class="stamp" id="db-grade"></div>
         </header>
@@ -86,8 +127,16 @@
             <tr><th>Drones detected</th><td id="db-det">0%</td></tr>
             <tr><th>Drones shot down per attack</th><td id="db-kills">0</td></tr>
             <tr id="db-stall-row"><th>Drones that never committed</th><td id="db-stall">0%</td></tr>
+            <tr id="db-follow-row" hidden><th>Moves that followed the pathfinder</th><td id="db-follow"></td></tr>
+            <tr id="db-hover-row" hidden><th>Moves spent hovering</th><td id="db-hover"></td></tr>
             <tr><th>Broke through in the replay</th><td id="db-replay">0/6</td></tr>
           </table>
+        </section>
+
+        <section id="db-tactics" hidden>
+          <h3 id="db-tactics-title">Tactics the swarm found</h3>
+          <p class="tip" id="db-tactics-note"></p>
+          <ol class="tactics" id="db-tactic-list"></ol>
         </section>
 
         <section id="db-blind">
@@ -172,7 +221,7 @@
       <div class="doc-meta"><span>Operation order</span><span class="mono" id="intro-dtg"></span></div>
       <h1>Hold the base against a swarm that learned to attack.</h1>
       <h3>Situation</h3>
-      <p>Six attack drones are inbound from the north. They were trained with reinforcement learning on AMD GPUs,
+      <p>Six attack drones are inbound <span id="intro-threat">from the north</span>. They were trained with reinforcement learning on AMD GPUs,
         playing millions of battles against defenses like yours until they learned to find the gaps.</p>
       <h3>Mission</h3>
       <p>Spend a budget of <b>15 points</b> on an air defense that stops as many drones as possible.</p>

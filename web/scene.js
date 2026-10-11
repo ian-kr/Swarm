@@ -15,6 +15,8 @@ export const COLORS = {
 };
 
 const cellXY = (c) => [c % G, Math.floor(c / G)];
+// move index -> (dx, dy) on the grid, y growing southward (matches redcell/config.py MOVES)
+export const MOVES = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, 0]];
 
 // Realistic terrain: a MeshStandardMaterial (lit, shadowed, fogged) whose albedo is generated in the
 // shader from altitude, slope and noise: grass and dry scrub on low ground, dirt on slopes, rock on steep
@@ -136,11 +138,12 @@ export class Scene3D {
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI * 0.46;
     this.controls.minDistance = 10;
-    this.controls.maxDistance = 90;
+    this.controls.maxDistance = 110;
     this.controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
     this.controls.update();
     this.autoFrame = true;
-    this.controls.addEventListener('start', () => { this.autoFrame = false; this.camAnim = null; });
+    this.controls.addEventListener('start', () => { this.autoFrame = false; this.camAnim = null; this._followZoom = false; });
+    this.followIdx = -1;
 
     // late-afternoon sun from the west with soft shadows; sky and ground bounce from the hemisphere light
     this.scene.add(new THREE.HemisphereLight(0xc4d6e8, 0x4a3d2c, 1.2));
@@ -169,7 +172,8 @@ export class Scene3D {
     this.actorGroup = new THREE.Group();
     this.fxGroup = new THREE.Group();
     this.pathGroup = new THREE.Group();
-    this.scene.add(this.unitGroup, this.ghostGroup, this.actorGroup, this.fxGroup, this.pathGroup);
+    this.tacticGroup = new THREE.Group();
+    this.scene.add(this.unitGroup, this.ghostGroup, this.actorGroup, this.fxGroup, this.pathGroup, this.tacticGroup);
     this.effects = [];
     this.anims = [];        // per-frame unit animations: (t, dt) => void
     this.raycaster = new THREE.Raycaster();
@@ -189,37 +193,47 @@ export class Scene3D {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     if (!w || !h) return;
     this.renderer.setSize(w, h);
-    // An overlay covering the right `r` pixels (the after-action report) shifts the projection centre
-    // left, so the board is framed in the visible part while the canvas stays full size.
-    const r = this.insetRight || 0;
-    this.camera.aspect = (w + r) / h;
-    if (r) this.camera.setViewOffset(w + r, h, r, 0, w, h); else this.camera.clearViewOffset();
+    // Overlays covering the right `r` pixels (the after-action report) or the bottom `bt` pixels (the
+    // network view) shift the projection centre, so the board is framed in the visible part while the
+    // canvas stays full size.
+    const r = this.insetRight || 0, bt = this.insetBottom || 0;
+    this.camera.aspect = (w + r) / (h + bt);
+    if (r || bt) this.camera.setViewOffset(w + r, h + bt, r, bt, w, h); else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
-    this.viewAspect = Math.max(0.3, (w - r) / h);
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+    this.viewTan = [tanHalf * Math.max(0.3, w - r) / (h + bt), tanHalf * Math.max(0.2, h - bt) / (h + bt)];   // visible half-angles
+    this.viewAspect = Math.max(0.3, (w - r) / Math.max(1, h - bt));
     if (this.autoFrame) this.frame(!!this._framed);   // animate refits after the first one
     this._framed = true;
   }
 
-  setInset(px) {
-    if ((this.insetRight || 0) === px) return;
+  setInset(px, bottom = 0) {
+    if ((this.insetRight || 0) === px && (this.insetBottom || 0) === bottom) return;
     this.insetRight = px;
+    this.insetBottom = bottom;
     this.resize();
   }
 
   // Fit the whole board in view from the default angle; animate unless told otherwise.
   frame(animate = true) {
     const dir = new THREE.Vector3(0.14, 0.66, 0.74).normalize();
-    const vfov = THREE.MathUtils.degToRad(this.camera.fov);
     const aspect = this.viewAspect ?? this.camera.aspect;
-    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
-    const dist = THREE.MathUtils.clamp((aspect < 1.2 ? 21.5 : 19) / Math.sin(Math.min(vfov, hfov) / 2), 30, 90);
+    const [tanH, tanV] = this.viewTan || [Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * aspect, Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)];
+    const half = Math.atan(Math.min(tanH, tanV));
+    const dist = THREE.MathUtils.clamp((aspect < 1.2 ? 21.5 : 19) / Math.sin(half), 30, 110);
     const target = new THREE.Vector3(0, 0.6, 1.2);
     const pos = target.clone().addScaledVector(dir, dist);
     if (!animate) { this.camera.position.copy(pos); this.controls.target.copy(target); this.controls.update(); return; }
     this.camAnim = { t: 0, p0: this.camera.position.clone(), t0: this.controls.target.clone(), p1: pos, t1: target };
   }
 
-  resetView() { this.autoFrame = true; this.frame(true); }
+  resetView() { this.followIdx = -1; this.autoFrame = true; this.frame(true); }
+
+  // Keep the camera on one drone (used while its neural network is open): ease in, then track it.
+  follow(i) {
+    this.followIdx = i;
+    if (i >= 0) { this.autoFrame = false; this.camAnim = null; this._followZoom = true; }
+  }
 
   setGrid(v) { this.tu.uGrid.value = v; }   // cell grid strength on the terrain (strong while placing units)
 
@@ -787,6 +801,25 @@ export class Scene3D {
     this.effects = [];
     this.drones = [];
     this.icpts = [];
+    this.focus = -1;
+    this.intent = null;
+    // selection ring and intent arrows for the drone whose "thinking" is shown
+    this.focusRing = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.08, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }));
+    this.focusRing.renderOrder = 10;
+    this.focusRing.visible = false;
+    const arrow = (color) => {
+      const a = new THREE.Group();
+      const m = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 });
+      a.add(mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.0, 8).rotateX(Math.PI / 2), m, 0, 0, 0.5));
+      a.add(mesh(new THREE.ConeGeometry(0.17, 0.4, 12).rotateX(Math.PI / 2), m, 0, 0, 1.15));
+      a.traverse((o) => { o.renderOrder = 11; });
+      a.visible = false;
+      return a;
+    };
+    this.arrowChosen = arrow(0xffffff);
+    this.arrowFollow = arrow(0xffd166);
+    this.actorGroup.add(this.focusRing, this.arrowChosen, this.arrowFollow);
     const D = this.droneGeo;
     for (let i = 0; i < nDrones; i++) {
       const g = new THREE.Group();
@@ -826,11 +859,13 @@ export class Scene3D {
       lock.rotation.x = -Math.PI / 2;
       lock.position.y = -0.2;
       g.add(lock);
+      const pick = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 6), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      g.add(pick);
       g.scale.setScalar(1.6);
       const shadow = this._shadow(1.5, 0.7);
       const trail = this._trail(0xff4d5e, 26);
       this.actorGroup.add(g, shadow, trail.line);
-      this.drones.push({ g, craft, mat, frame, blade, disc, ring: lock, lockMat, trail, glow, rotors, shadow, last: null, yaw: 0, bank: 0 });
+      this.drones.push({ g, craft, mat, frame, blade, disc, ring: lock, lockMat, trail, glow, rotors, shadow, pick, last: null, yaw: 0, bank: 0 });
     }
     const I = this.icptGeo;
     for (let i = 0; i < nIcpt; i++) {
@@ -887,7 +922,11 @@ export class Scene3D {
     d.g.visible = s.visible;
     d.trail.line.visible = s.visible;
     d.shadow.visible = s.visible;
-    if (!s.visible) { d.trail.pts = []; d.last = null; return; }
+    if (!s.visible) {
+      d.trail.pts = []; d.last = null;
+      if (i === this.focus) this.focusRing.visible = this.arrowChosen.visible = this.arrowFollow.visible = false;
+      return;
+    }
     const now = performance.now();
     const a = this.cellWorld(s.cellA, DRONE_ALT), b = this.cellWorld(s.cellB, DRONE_ALT);
     const p = a.clone().lerp(b, s.f);
@@ -916,10 +955,42 @@ export class Scene3D {
     d.ring.rotation.z = now / 600;
     d.ring.scale.setScalar(1 + 0.08 * Math.sin(now / 120));
     for (const r of d.rotors) r.rotation.y += 0.9;
+    if (i === this.focus) this._placeFocus(p);
     const gy = this.heightAt(p.x, p.z);
     d.shadow.position.set(p.x, gy + 0.03, p.z);
     d.shadow.material.opacity = 0.4 * alpha;
     this._pushTrail(d.trail, p);
+  }
+
+  // Which drone's thinking is shown, and its intent this step: chosen and pathfinder move indices
+  // (0-7 compass, 8 hover, -1 none); followed = it chose "follow the pathfinder".
+  setFocus(i) { this.focus = i; if (i < 0 && this.focusRing) this.focusRing.visible = this.arrowChosen.visible = this.arrowFollow.visible = false; }
+  setIntent(intent) { this.intent = intent; }
+
+  _placeFocus(p) {
+    this.focusRing.visible = true;
+    this.focusRing.position.copy(p);
+    this.focusRing.scale.setScalar(1 + 0.06 * Math.sin(performance.now() / 160));
+    const it = this.intent;
+    const aim = (arrow, k, show) => {
+      arrow.visible = show && k >= 0 && k < 8;
+      if (!arrow.visible) return;
+      const [dx, dy] = MOVES[k];
+      arrow.position.set(p.x, p.y + 0.12, p.z);
+      arrow.rotation.set(0, Math.atan2(dx, dy), 0);
+    };
+    aim(this.arrowFollow, it ? it.follow : -1, !!it);
+    aim(this.arrowChosen, it ? it.chosen : -1, !!it && !it.followed);
+  }
+
+  pickDrone(ev) {
+    if (!this.drones?.length) return -1;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const v = new THREE.Vector2(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(v, this.camera);
+    const live = this.drones.map((d) => d.pick).filter((m, i) => this.drones[i].g.visible);
+    const hit = this.raycaster.intersectObjects(live, false)[0];
+    return hit ? this.drones.findIndex((d) => d.pick === hit.object) : -1;
   }
 
   updateIcpt(i, s) {
@@ -984,13 +1055,26 @@ export class Scene3D {
   // ------------------------------------------------------------- paths
   clearPaths() { this.pathGroup.clear(); }
 
-  drawPath(cells, color, { radius = 0.07, lift = 0.35, opacity = 0.95 } = {}) {
+  // Routes of one discovered tactic: thick tubes with an arrowhead at the base end.
+  drawTactic(paths, color) {
+    this.tacticGroup.clear();
+    for (const cells of paths || []) {
+      if (cells.length < 2) continue;
+      this.drawPath(cells, color, { radius: 0.12, lift: 0.9, group: this.tacticGroup });
+      const a = this.cellWorld(cells[cells.length - 2], 0.9), b = this.cellWorld(cells[cells.length - 1], 0.9);
+      const head = mesh(new THREE.ConeGeometry(0.32, 0.8, 14).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color, toneMapped: false }), b.x, b.y, b.z);
+      head.lookAt(b.clone().add(b.clone().sub(a)));
+      this.tacticGroup.add(head);
+    }
+  }
+
+  drawPath(cells, color, { radius = 0.07, lift = 0.35, opacity = 0.95, group = this.pathGroup } = {}) {
     if (cells.length < 2) return null;
     const pts = cells.map((c) => this.cellWorld(c, lift));
     const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
     const geo = new THREE.TubeGeometry(curve, Math.max(8, pts.length * 4), radius, 6, false);
     const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity, depthWrite: opacity >= 1, toneMapped: false }));
-    this.pathGroup.add(m);
+    group.add(m);
     return m;
   }
 
@@ -1044,6 +1128,19 @@ export class Scene3D {
       this.baseRing.material.opacity = alarm ? 0.5 + 0.5 * Math.sin(now * 20) : 0.3 + 0.2 * Math.sin(now * 2);
       const blink = (now % 1.4) < 0.18 || alarm;
       this.baseBeacon.visible = blink;
+    }
+    const fd = this.followIdx >= 0 && this.drones?.[this.followIdx];
+    if (fd && fd.g.visible) {
+      const k = 1 - Math.pow(0.03, dt);
+      const delta = fd.g.position.clone().sub(this.controls.target).multiplyScalar(k);
+      this.controls.target.add(delta);
+      this.camera.position.add(delta);
+      if (this._followZoom) {
+        // ease to a steep, close view so hills between camera and drone don't hide it
+        const want = this.controls.target.clone().add(new THREE.Vector3(0.1, 0.86, 0.5).normalize().multiplyScalar(24));
+        this.camera.position.lerp(want, Math.min(1, dt * 2.5));
+        if (this.camera.position.distanceTo(want) < 0.3) this._followZoom = false;
+      }
     }
     if (this.camAnim) {
       const c = this.camAnim;

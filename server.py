@@ -18,10 +18,18 @@ from pydantic import BaseModel, Field
 
 from redcell import config as C
 from redcell.game import Game, LayoutError
+from redcell.terrain import THEATERS
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="RED CELL")
-game = Game(device=os.environ.get("REDCELL_DEVICE", "cpu"))
+# one game per theater: "north" (the original north-axis game) and "360" (drones from every side)
+GAMES = {m: Game(device=os.environ.get("REDCELL_DEVICE", "cpu"), mode=m) for m in THEATERS}
+
+
+def get_game(mode: str) -> Game:
+    if mode not in GAMES:
+        raise HTTPException(404, f"unknown mode '{mode}'")
+    return GAMES[mode]
 
 
 class LayoutIn(BaseModel):
@@ -33,6 +41,7 @@ class LayoutIn(BaseModel):
 class CoverageReq(BaseModel):
     map: int
     layout: LayoutIn
+    mode: str = "north"
 
 
 class SimReq(BaseModel):
@@ -40,18 +49,22 @@ class SimReq(BaseModel):
     layout: LayoutIn
     difficulty: str = "scripted"
     seed: int | None = None
+    mode: str = "north"
 
 
 @app.get("/api/config")
-def get_config():
-    return dict(grid=C.GRID, budget=C.BUDGET, units=C.UNITS, drones=C.N_DRONES, max_steps=C.MAX_STEPS,
+def get_config(mode: str = "north"):
+    game = get_game(mode)
+    return dict(mode=mode, modes=[dict(key=k, label=t["label"], trained=bool(GAMES[k].policies)) for k, t in THEATERS.items()],
+                grid=C.GRID, budget=C.BUDGET, units=C.UNITS, drones=C.N_DRONES, max_steps=C.MAX_STEPS,
                 interceptors_per_pad=C.INTERCEPTORS_PER_PAD, kill_prob=C.KILL_PROB,
                 difficulties=game.difficulties(), timeline=game.timeline_info(),
                 maps=[dict(id=i, name=n, blurb=b) for i, (n, b) in enumerate(zip(game.ms.names, game.ms.blurbs))])
 
 
 @app.get("/api/map/{map_id}")
-def get_map(map_id: int):
+def get_map(map_id: int, mode: str = "north"):
+    game = get_game(mode)
     if not 0 <= map_id < game.ms.n:
         raise HTTPException(404, "unknown map")
     return game.map_payload(map_id)
@@ -59,6 +72,7 @@ def get_map(map_id: int):
 
 @app.post("/api/coverage")
 def post_coverage(req: CoverageReq):
+    game = get_game(req.mode)
     try:
         return game.coverage(req.map, req.layout.model_dump())
     except LayoutError as e:
@@ -67,6 +81,7 @@ def post_coverage(req: CoverageReq):
 
 @app.post("/api/simulate")
 def post_simulate(req: SimReq):
+    game = get_game(req.mode)
     seed = req.seed if req.seed is not None else random.randrange(1 << 30)
     try:
         return game.simulate(req.map, req.layout.model_dump(), req.difficulty, seed)
@@ -74,10 +89,32 @@ def post_simulate(req: SimReq):
         raise HTTPException(400, str(e))
 
 
+class BrainReq(BaseModel):
+    map: int
+    layout: LayoutIn
+    difficulty: str
+    seed: int
+    n: int
+    battle: int
+    drone: int
+    mode: str = "north"
+
+
+@app.post("/api/brain")
+def post_brain(req: BrainReq):
+    """One drone's neural network, step by step, for a battle the client is replaying."""
+    game = get_game(req.mode)
+    try:
+        return game.brain(req.map, req.layout.model_dump(), req.difficulty, req.seed, req.n, req.battle, req.drone)
+    except LayoutError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/training")
-def get_training():
-    """Training curve + which checkpoints back each difficulty, for the 'Under the hood' panel."""
-    spec_path = ROOT / "data" / "difficulties.json"
+def get_training(mode: str = "north"):
+    """Training curve + which checkpoints back each difficulty, for the 'How it was trained' annex."""
+    game = get_game(mode)
+    spec_path = ROOT / game.art["difficulties"]
     spec = json.loads(spec_path.read_text()) if spec_path.exists() else {}
     metrics = []
     mpath = ROOT / spec.get("metrics", "checkpoints/metrics.jsonl")

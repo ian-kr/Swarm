@@ -5,6 +5,7 @@
 - [ ] Hard-refresh once. The mission briefing shows only on first visit (click **Briefing** to reopen it)
 - [ ] Check that all four enemies are enabled (the learned ones need `models/` and `data/difficulties.json`)
 - [ ] Record a backup screen capture of one full run in case the laptop or venue misbehaves
+- [ ] Sound is on by default (radar pings, interceptor launches, explosions, breach alarm). Toggle it with **Sound on** at the top right if the room needs quiet
 - [ ] Everything runs offline (Three.js and the fonts are vendored), so wifi isn't needed
 
 ## The 3-minute pitch
@@ -20,7 +21,22 @@
   diamonds in the bottom bar are the drones (military symbology for hostile air tracks): they fill in when radar
   tracks one, cross out when it's shot down, and go solid red when it breaks through.
 
+- **Point at the "What it's thinking" panel** (bottom right; click any drone or its diamond to switch). "This is the
+  neural network's actual output for this drone, right now. The compass shows where it wants to go: red is its own
+  choice, gold is 'follow the pathfinder', white is what it picked. The forecast is its value estimate: the network's
+  own guess at whether this drone gets through." In the time-lapse, the first update's compass is an even blur
+  (it has no idea yet), and the Veteran's is sharp.
+
+- **Press N for the network view** (15 s, the strongest Technical Understanding moment): "This is the actual
+  network: 2.1 million parameters. Left, what this drone sees. Middle, every layer firing. Right, its 10 possible
+  moves. Orange lines are the neurons that voted for the move it took. Pink is attention: which inputs changed its
+  decision most, here mostly the threat field around it, and you can see it on the map too." Press N again to close.
+
 **3. After-action report (40 s)**
+- Lead with **Tactics the swarm found**: "We never programmed tactics. The swarm was only rewarded for getting
+  through. RED CELL mines all 64 attacks and names what emerged." Click **Show on map**, then **Watch an example**.
+  Typical finds: the learned swarm *waits* (holds position 9 to 13 steps, then dashes), while A\* against the same
+  defense just takes the radar-shadow route; in 360°, pincers in about a fifth of attacks.
 - Read the breach rate: "That's averaged over 64 simulated attacks, not one lucky run."
 - Point at the blind-spot callout and the red corridor. Click **Place suggested radar** and relaunch if time allows.
 - Turn on **A\* planner view**: "Gold is what a classic A\* planner does against your defense, gray is the plain
@@ -40,6 +56,11 @@
   classic A\* planner, it gets **15% more drones through**: 26% vs 23%, measured on 197 defenses it never trained on."
 - How: "It spends less than half as long detected (4% vs 10%), waits for openings instead of rushing, spreads its
   approach over twice as many cells, and follows the pathfinder about a third of the time, improvising the rest."
+
+**Optional, if there's time: 360° (20 s).** Flip **Threat axis** to **360°**. "Same pipeline, new theater: the base is
+mid-map and drones come from every edge. We retrained a separate swarm for it on the AMD GPU in 16 minutes, and
+there it gets 2.1 times as many drones through as A\* (57% vs 27% on held-out defenses)." Launch Veteran on
+Crossroads and point at drones converging from several sides. The 360° time-lapse is the most dramatic one.
 
 **6. Close (20 s)**
 > "Who it helps: counter-drone operators and base planners. It lets them practice against an adversary that adapts,
@@ -71,6 +92,32 @@
   gets the whole screen.
 
 ## Likely judge questions (know these cold)
+- **Is the network view real or an illustration?** Real. The server re-runs the exact battle from its random seed
+  (everything, including the drones' action sampling, is seeded) and records the network's activations at every
+  step for the drone you picked. A unit test checks the re-run makes exactly the moves the replay showed.
+- **How is "attention" computed?** Gradient times input: for the move the drone chose, how much each input value
+  changed that move's score. It's a standard attribution method; it shows what the decision was sensitive to, not
+  a human-style reason.
+- **Why does it look at the threat field so much?** That input already encodes A\*-style cost-to-go around every
+  sensor, so it's the most useful single signal. The network learned to lean on it and to deviate when timing or
+  other drones matter.
+- **How are tactics detected? Isn't that you labeling things?** Every breaching drone's route is resampled to ten
+  points and grouped with routes that stay within about 3 cells of it the whole way. Each group gets a name from
+  the direction it reached the base from and simple measured features (stationary steps, share of route on low
+  ground, share undetected). Swarm patterns are timing rules across drones in the same attack (3+ breaches within 4
+  steps, breaches 90 degrees apart within 8 steps, a kill on one side followed by a breach on another). The labels
+  describe what happened, not intent, and the same analysis runs on the scripted A\* enemy for comparison.
+- **Why does the learned swarm beat A\* by more in 360° than north?** With every edge open, picking *where* to
+  attack matters more than *how* to fly a fixed corridor. A\* sends each drone down its cheapest route from wherever
+  it entered; the swarm learned to probe and shift toward the weakest side. In the north theater the terrain
+  funnels everyone, so there is less to choose.
+- **Did you just rotate the old maps?** No. The old maps were designed around a northern threat (ridges shielding a
+  base near the south edge). The 360° theater has six new maps with central bases, its own precomputed
+  line-of-sight and Dijkstra tables, and its own trained network.
+- **What is the "forecast" in the thinking panel?** PPO trains two heads on the same network: the policy (the
+  action probabilities in the compass) and a critic that predicts the future reward from this state. We show the
+  critic's number: high means the network expects this drone to break through (+10 reward), low means it expects
+  to be shot down or time out. It's the network's own confidence, not something we compute separately.
 - **Why does the training curve flatten?** It starts from random flight (2%), learns to use the pathfinder and
   reaches A\* level by update 10, then improves slowly (when to wait, when to deviate). Later checkpoints are noisy,
   so we keep the best one on the selection benchmark and verify it on held-out defenses.

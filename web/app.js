@@ -1,4 +1,5 @@
 import { Scene3D, COLORS } from '/static/scene.js';
+import { sfx } from '/static/sound.js';
 
 const $ = (s) => document.querySelector(s);
 const STEPS_PER_SEC = 5;
@@ -28,10 +29,19 @@ const S = {
   layout: { radar: [], jammer: [], pad: [] }, coverage: null, preview: null, hover: -1,
   result: null, replay: null, astarAnim: null, ov: { breach: true, traffic: false, astar: false, sensors: true },
   learn: { stages: [], idx: -1, chain: false, busy: false },
+  focus: -1, focusManual: false, focusEndT: null, mindKey: '',
+  mode: 'north', tactic: -1,
+  net: { open: false, key: '', data: null, cache: new Map(), drawn: '', att: true },
 };
+const TACTIC_COLORS = ['#ff8a3d', '#c77dff', '#f4f4f4', '#ff5fa2'];
+const DIRS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'hover'];
+const fmtPct = (x) => `${Math.round(x * 100)}%`;
 
 const scene = new Scene3D($('#stage'));
+// every request carries the current theater ("north" or "360")
 const api = async (path, body) => {
+  if (body) body = { ...body, mode: S.mode };
+  else path += `${path.includes('?') ? '&' : '?'}mode=${encodeURIComponent(S.mode)}`;
   const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
   const j = await r.json();
   if (!r.ok) throw new Error(j.detail || r.statusText);
@@ -43,15 +53,33 @@ const store = {
 };
 
 // ------------------------------------------------------------------ setup
-async function init() {
+// Everything that depends on the theater: maps, enemies and their measured threat, the timeline.
+async function applyConfig() {
   [S.cfg, S.training] = await Promise.all([api('/api/config'), api('/api/training').catch(() => ({}))]);
   $('#budget-total').textContent = S.cfg.budget;
   const sel = $('#sel-map');
+  sel.innerHTML = '';
   for (const m of S.cfg.maps) sel.add(new Option(m.name, m.id));
-  sel.onchange = () => loadMap(+sel.value);
+
+  const ms = $('#seg-mode');
+  ms.innerHTML = '';
+  for (const m of S.cfg.modes) {
+    const b = document.createElement('button');
+    b.dataset.mode = m.key;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', m.key === S.mode);
+    b.classList.toggle('on', m.key === S.mode);
+    b.innerHTML = `${m.label}${m.trained ? '' : '<span class="sub">A* only</span>'}`;
+    b.title = m.key === '360' ? 'Drones enter from every edge; the base sits mid-map' : 'Drones enter along the northern edge';
+    b.onclick = () => setMode(m.key);
+    ms.appendChild(b);
+  }
+  document.body.dataset.mode = S.mode;
+  $('#intro-threat').textContent = S.mode === '360' ? 'from every direction' : 'from the north';
 
   // opposing force: threat meter = held-out breach rate against strong defenses, relative to the strongest
   const seg = $('#seg-diff');
+  seg.innerHTML = '';
   const top = Math.max(...S.cfg.difficulties.map((d) => d.eval_breach || 0), 1e-6);
   for (const d of S.cfg.difficulties) {
     const b = document.createElement('button');
@@ -68,6 +96,21 @@ async function init() {
   const saved = store.get('rc-diff');
   const best = [...S.cfg.difficulties].reverse().find((d) => d.available);
   setDiff(S.cfg.difficulties.find((d) => d.key === saved && d.available) ? saved : best.key);
+}
+
+async function setMode(m) {
+  if (m === S.mode || S.phase === 'attack') return;
+  S.mode = m;
+  store.set('rc-mode', m);
+  sfx.click();
+  await applyConfig();
+  await loadMap(0);
+}
+
+async function init() {
+  S.mode = store.get('rc-mode') === '360' ? '360' : 'north';
+  await applyConfig();
+  $('#sel-map').onchange = () => loadMap(+$('#sel-map').value);
 
   const units = $('#units');
   for (const [k, u] of Object.entries(S.cfg.units)) {
@@ -102,6 +145,16 @@ async function init() {
   $('#btn-hood').onclick = openHood;
   $('#btn-help').onclick = () => { $('#intro-dtg').textContent = dtg(); $('#dlg-intro').showModal(); };
   $('#btn-view').onclick = () => scene.resetView();
+  const sb = $('#btn-sound');
+  const syncSound = () => { sb.textContent = sfx.enabled ? 'Sound on' : 'Sound off'; sb.setAttribute('aria-pressed', sfx.enabled); };
+  sb.onclick = () => { sfx.setEnabled(!sfx.enabled); syncSound(); if (!sfx.enabled) sfx.humStop(); };
+  syncSound();
+  $('#mind-close').onclick = () => setFocus(-1, true);
+  $('#mind-net').onclick = () => openNet(true);
+  $('#net-close').onclick = () => openNet(false);
+  $('#net-att').onchange = (e) => { S.net.att = e.target.checked; S.net.drawn = ''; redraw(); };
+  window.addEventListener('resize', () => { S.net.drawn = ''; });
+  $('#pips').onclick = (e) => { const t = e.target.closest('.trk'); if (t) setFocus(+t.dataset.i, true); };
   $('#scrub').oninput = (e) => { if (S.replay) { S.replay.t = +e.target.value; S.replay.lastIdx = Math.floor(S.replay.t); S.replay.done = false; } };
   for (const b of document.querySelectorAll('#seg-speed button')) b.onclick = () => setSpeed(+b.dataset.speed);
   for (const cb of document.querySelectorAll('#toggles input')) cb.onchange = () => {
@@ -125,6 +178,7 @@ function setDiff(k) {
 }
 
 function setTool(k) {
+  if (S.tool !== k) sfx.click();
   S.tool = k;
   for (const b of document.querySelectorAll('.unit')) { b.classList.toggle('on', b.dataset.kind === k); b.setAttribute('aria-checked', b.dataset.kind === k); }
   S.preview = null;
@@ -158,13 +212,15 @@ function canPlace(kind, c) {
 }
 
 function onClick(ev) {
+  if (S.phase === 'attack') { const i = scene.pickDrone(ev); if (i >= 0) setFocus(i, true); return; }
   if (S.phase !== 'defend') return;
   const c = scene.pickCell(ev);
   if (c < 0) return;
   const occ = occupant(c);
-  if (occ) { S.layout[occ] = S.layout[occ].filter((x) => x !== c); layoutChanged(); return; }
+  if (occ) { S.layout[occ] = S.layout[occ].filter((x) => x !== c); sfx.remove(); layoutChanged(); return; }
   const err = canPlace(S.tool, c);
   if (err) { flashError(err); return; }
+  sfx.place(S.tool);
   S.layout[S.tool].push(c);
   S.preview = null;
   layoutChanged();
@@ -217,6 +273,7 @@ function renderBudget() {
 }
 
 function flashError(msg) {
+  sfx.error();
   const el = $('#err');
   el.textContent = msg;
   el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake');
@@ -256,11 +313,13 @@ function setPhase(p) {
   $('#playback').hidden = p !== 'attack';
   $('#panel-right').hidden = p !== 'debrief';
   $('#sel-map').disabled = p === 'attack';
+  for (const b of document.querySelectorAll('#seg-mode button')) b.disabled = p === 'attack';
   $('#hud-status').textContent = PHASE_STATUS[p];
   scene.setGrid(p === 'defend' ? 0.1 : 0.035);
   if (p !== 'defend') scene.setGhost(null, -1);
   if (p !== 'debrief') { scene.clearPaths(); S.astarAnim = null; }
-  if (p !== 'attack') { setCaption(null); delete document.body.dataset.learning; }
+  if (p === 'defend') { scene.drawTactic(null); S.tactic = -1; }
+  if (p !== 'attack') { setCaption(null); delete document.body.dataset.learning; sfx.humStop(); setFocus(-1, false); $('#mind-hint').hidden = true; if (S.net.open) openNet(false, true); }
   if (p === 'defend') { scene.resetActors(0, 0); $('#feed').innerHTML = ''; S.replay = null; S.learn.chain = false; }
   if (p === 'attack') scene.resetActors(0, 0);
   applyInset();
@@ -272,16 +331,19 @@ function setPhase(p) {
 function applyInset() {
   const rep = $('#panel-right');
   const wide = window.innerWidth > 900;
-  scene.setInset(S.phase === 'debrief' && wide ? rep.offsetWidth + 16 : 0);
+  const net = $('#net');
+  scene.setInset(S.phase === 'debrief' && wide ? rep.offsetWidth + 16 : 0, S.phase === 'attack' && S.net.open && wide ? net.offsetHeight + 14 : 0);
 }
 
 async function launch() {
   if (S.phase !== 'defend' || !$('#simulating').hidden) return;
+  sfx.commit();
   $('#simulating').hidden = false;
   $('#sim-count').textContent = S.diff === 'scripted' ? 32 : 64;
   try {
     S.result = await api('/api/simulate', { map: S.mapId, layout: S.layout, difficulty: S.diff });
     S.result.mapName = S.cfg.maps[S.mapId].name;
+    S.tactic = -1;
     S.learn = { stages: [], idx: -1, chain: false, busy: false };
     startReplay();
   } catch (e) {
@@ -308,7 +370,9 @@ function startReplay(res = S.result, opts = {}) {
   setSpeed(speed);
   $('#scrub').max = frames.length - 1;
   $('#btn-play').classList.remove('paused');
-  $('#pips').innerHTML = frames[0].d.map((_, i) => `<span class="trk" data-s="alive" title="Drone ${i + 1}">${trackSym(i + 1)}</span>`).join('');
+  $('#pips').innerHTML = frames[0].d.map((_, i) => `<span class="trk" data-i="${i}" data-s="alive" title="UAV-${i + 1}: click to see what it's thinking">${trackSym(i + 1)}</span>`).join('');
+  S.focusManual = false;
+  setFocus(res.rep.thinking ? 0 : -1, false);
   renderTicks(frames);
   feed('', `${S.cfg.drones} hostile UAVs inbound`, 'var(--enemy)');
 }
@@ -362,7 +426,8 @@ function tick(dt) {
   const idx = Math.min(Math.floor(R.t), F - 1), f = R.t - idx;
   const A = frames[idx], B = frames[Math.min(idx + 1, F - 1)];
 
-  while (R.lastIdx < idx) { R.lastIdx++; frameEvents(frames[R.lastIdx - 1], frames[R.lastIdx]); }
+  const quiet = idx - R.lastIdx > 3;   // scrubbing: update state without a burst of sounds
+  while (R.lastIdx < idx) { R.lastIdx++; frameEvents(frames[R.lastIdx - 1], frames[R.lastIdx], quiet); }
 
   A.d.forEach((a, i) => {
     const b = B.d[i];
@@ -383,6 +448,12 @@ function tick(dt) {
     if (st === 'down') down++; else if (st === 'through') through++;
   });
   if (!document.body.dataset.learning) $('#hud-status').textContent = `${A.d.length - down - through} airborne · ${down} down · ${through} through`;
+  sfx.hum(R.playing && R.t < F - 1 ? A.d.length - down - through : 0);
+  updateMind(R, idx, A);
+  if (S.net.open && S.net.data) {
+    const key = `${S.net.key}:${idx}`;
+    if (key !== S.net.drawn) { S.net.drawn = key; drawNet(idx); redraw(); }
+  }
   if (R.t >= F - 1 && !R.done) {
     R.done = true;
     const stalled = frames[F - 1].d.filter((d) => d[1] === 0).length;
@@ -391,22 +462,23 @@ function tick(dt) {
   }
 }
 
-function frameEvents(prev, cur) {
+function frameEvents(prev, cur, quiet = false) {
   const R = S.replay;
   cur.d.forEach((d, i) => {
     const p = prev.d[i];
     const who = `UAV-${i + 1}`;
-    if (p[1] === 0 && d[1] === 1) { scene.explode(d[0]); feed(who, 'destroyed', 'var(--pad)'); }
+    if (p[1] === 0 && d[1] === 1) { scene.explode(d[0]); feed(who, 'destroyed', 'var(--pad)'); if (!quiet) sfx.boom(); }
     if (p[1] === 0 && d[1] === 2) {
+      if (!quiet) sfx.breach();
       scene.flashBase();
       feed(who, 'reached the base', 'var(--enemy)');
       const st = $('#stage');
       st.classList.remove('hit'); void st.offsetWidth; st.classList.add('hit');
     }
-    if (d[2] === 1 && !R.seen.has(i)) { R.seen.add(i); feed(who, 'detected by radar', 'var(--radar)'); }
+    if (d[2] === 1 && !R.seen.has(i)) { R.seen.add(i); feed(who, 'detected by radar', 'var(--radar)'); if (!quiet) sfx.ping(); }
   });
   cur.i.forEach((it, k) => {
-    if (prev.i[k][1] === 0 && it[1] === 1) feed('', 'Interceptor launched', '#7fe3ff');
+    if (prev.i[k][1] === 0 && it[1] === 1) { feed('', 'Interceptor launched', '#7fe3ff'); if (!quiet) sfx.launch(); }
   });
 }
 
@@ -418,6 +490,7 @@ function showDebrief() {
   $('#feed').innerHTML = '';
   const diff = S.cfg.difficulties.find((d) => d.key === r.difficulty);
   $('#db-title').textContent = `${r.mapName} vs. ${diff.label}`;
+  $('#db-kind').textContent = S.mode === '360' ? 'After-action report · 360° threat' : 'After-action report';
   $('#db-dtg').textContent = dtg();
   const pct = Math.round(r.breach_rate * 100);
   const stall = r.stall_rate ?? 0;
@@ -428,7 +501,7 @@ function showDebrief() {
   const st = $('#db-grade');
   st.textContent = '';
   st.style.setProperty('--sc', ink);
-  requestAnimationFrame(() => { st.textContent = stamp; });
+  requestAnimationFrame(() => { st.textContent = stamp; setTimeout(() => sfx.stamp(), 300); });
   $('#db-n').textContent = r.battles;
 
   const hold = $('#db-holdback');
@@ -453,6 +526,10 @@ function showDebrief() {
   $('#db-stall-row').hidden = stall < 0.01;
   $('#db-stall').textContent = `${Math.round(stall * 100)}%`;
   $('#db-replay').textContent = `${r.rep.breaches} of ${S.cfg.drones}`;
+  $('#db-follow-row').hidden = $('#db-hover-row').hidden = !r.policy;
+  if (r.policy) { $('#db-follow').textContent = fmtPct(r.policy.follow); $('#db-hover').textContent = fmtPct(r.policy.hover); }
+
+  renderTactics(r);
 
   const bs = db.blind_spot;
   $('#db-blind').hidden = !bs;
@@ -475,6 +552,48 @@ function showDebrief() {
   if (S.ov.astar) startAstarAnim(true);
   updateTags();
   redraw();
+}
+
+// ------------------------------------------------------------------ discovered tactics
+function renderTactics(r) {
+  const list = $('#db-tactic-list');
+  const tacs = r.tactics || [];
+  $('#db-tactics').hidden = !tacs.length;
+  list.innerHTML = '';
+  if (!tacs.length) { scene.drawTactic(null); return; }
+  const learned = r.difficulty !== 'scripted';
+  $('#db-tactics-title').textContent = learned ? 'Tactics the swarm found' : 'How the A* planner got through';
+  $('#db-tactics-note').textContent = learned
+    ? `Found automatically across all ${r.battles} attacks. Nobody programmed these: the swarm was only ever rewarded for getting through.`
+    : `Patterns across all ${r.battles} attacks. The A* planner follows fixed rules; these are the routes and timings they produced.`;
+  tacs.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.style.setProperty('--tc', TACTIC_COLORS[i % TACTIC_COLORS.length]);
+    li.classList.toggle('on', S.tactic === i);
+    const share = t.kind === 'corridor' || t.kind === 'probing' ? `${fmtPct(t.share)} of breaches` : `${fmtPct(t.share)} of attacks`;
+    li.innerHTML = `<div class="t-head"><b></b><span class="t-share">${share}</span></div><p></p>
+      <div class="t-act"><button class="doc-btn small" data-show>${S.tactic === i ? 'Hide' : 'Show on map'}</button><button class="doc-btn small" data-watch>Watch an example</button></div>`;
+    li.querySelector('b').textContent = t.name;
+    li.querySelector('p').textContent = t.text;
+    li.querySelector('[data-show]').onclick = () => { S.tactic = S.tactic === i ? -1 : i; showTactic(); renderTactics(r); };
+    li.querySelector('[data-watch]').onclick = () => watchTactic(i);
+    list.appendChild(li);
+  });
+  showTactic();
+}
+
+function showTactic() {
+  const t = S.result?.tactics?.[S.tactic];
+  scene.drawTactic(t ? t.paths : null, TACTIC_COLORS[S.tactic % TACTIC_COLORS.length]);
+}
+
+function watchTactic(i) {
+  const t = S.result.tactics[i], ex = S.result.examples?.[String(t.battle)];
+  if (!ex) return;
+  S.tactic = i;
+  startReplay({ rep: ex, seed: S.result.seed, difficulty: S.result.difficulty, battles: S.result.battles }, { onEnd: () => showDebrief() });
+  setCaption({ k: `Tactic example · attack ${t.battle + 1} of ${S.result.battles}`, t: t.name, s: t.text, n: 0, i: 0 });
+  showTactic();
 }
 
 function countUp(el, to, fmt, ms = 700) {
@@ -560,6 +679,7 @@ async function runLearn() {
 
 function playStage(i) {
   const tl = S.cfg.timeline, st = tl[i], res = S.learn.stages[i];
+  sfx.tick();
   S.learn.idx = i;
   startReplay(res, { speed: 2, onEnd: () => (S.learn.chain && i + 1 < tl.length ? playStage(i + 1) : endLearn()) });
   document.body.dataset.learning = '1';
@@ -582,11 +702,329 @@ function endLearn() {
 function setCaption(c) {
   const el = $('#caption');
   el.hidden = !c;
+  if (c) document.body.dataset.caption = '1'; else delete document.body.dataset.caption;
   if (!c) return;
   el.innerHTML = `<div class="cap-k"></div><div class="cap-t"></div><div class="cap-s"></div><div class="cap-steps">${Array.from({ length: c.n }, (_, j) => `<i class="${j < c.i ? 'done' : j === c.i ? 'on' : ''}"></i>`).join('')}</div>`;
   el.querySelector('.cap-k').textContent = c.k;
   el.querySelector('.cap-t').textContent = c.t;
   el.querySelector('.cap-s').textContent = c.s;
+}
+
+// ------------------------------------------------------------------ what the drone is thinking
+function setFocus(i, manual) {
+  S.focus = i;
+  S.focusEndT = null;
+  if (manual) S.focusManual = true;
+  S.mindKey = '';
+  scene.setFocus(i);
+  scene.setIntent(null);
+  for (const el of document.querySelectorAll('#pips .trk')) el.classList.toggle('focus', +el.dataset.i === i);
+  if (S.net.open && i >= 0) { scene.follow(i); loadBrain(); }
+  const attack = S.phase === 'attack';
+  $('#mind').hidden = !(attack && i >= 0);
+  $('#mind-hint').hidden = !(attack && i < 0);
+}
+
+function updateMind(R, idx, frame) {
+  const i = S.focus;
+  if (i < 0) return;
+  const d = frame.d[i];
+  // follow a live drone automatically until the viewer picks one themselves
+  if (d[1] !== 0 && !S.focusManual) {
+    if (S.focusEndT == null) S.focusEndT = R.t;
+    else if (R.t - S.focusEndT > 6) {
+      const next = frame.d.findIndex((x) => x[1] === 0);
+      if (next >= 0) { setFocus(next, false); return; }
+    }
+  }
+  const key = `${i}:${idx}:${R.res.rep.index}`;
+  if (key === S.mindKey) return;
+  S.mindKey = key;
+  const th = R.res.rep.thinking;
+  const mind = $('#mind');
+  mind.classList.toggle('scripted', !th);
+  $('#mind-who').textContent = `UAV-${i + 1}`;
+  $('#mind-state').textContent = d[1] === 1 ? 'Destroyed' : d[1] === 2 ? 'Broke through'
+    : [d[2] ? 'Tracked by radar' : 'Undetected', d[3] ? 'jammed' : ''].filter(Boolean).join(' · ');
+  const say = $('#mind-say');
+  if (!th) {
+    say.textContent = 'Scripted A* enemy: no neural network. Every drone flies the cheapest threat-aware A* route around your known sensors.';
+    scene.setIntent(null);
+    return;
+  }
+  if (d[1] !== 0 || idx >= th.p.length) {
+    say.textContent = d[1] === 1 ? `Shot down at T+${pad2(idx)}.` : d[1] === 2 ? `Reached the base at T+${pad2(idx)}.` : 'No decision this step.';
+    scene.setIntent(null);
+    return;
+  }
+  const p = th.p[idx][i].map((x) => x / 1000), a = th.a[idx][i], f = th.f[idx][i], v = th.v[idx][i];
+  drawRose(p, a, f);
+  $('#mind-follow').textContent = fmtPct(p[9]);
+  $('#mind-follow-bar').style.width = fmtPct(p[9]);
+  $('#mind-hover').textContent = fmtPct(p[8]);
+  $('#mind-hover-bar').style.width = fmtPct(p[8]);
+  // the critic's value estimate: the drone's own forecast of how this attack will turn out
+  $('#mind-value').textContent = `${v >= 6 ? 'through' : v >= 2 ? 'unsure' : 'stopped'} ${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
+  $('#mind-value-bar').style.width = `${Math.max(3, Math.min(100, (v / 10) * 100))}%`;
+  let msg = a === 9 ? `Following the pathfinder: heading ${DIRS[f]} (${fmtPct(p[9])} sure).`
+    : a === 8 ? `Holding position, waiting for an opening (${fmtPct(p[8])}).`
+    : a === f ? `Heading ${DIRS[a]}, the same way the pathfinder would go.`
+    : `Improvising: heading ${DIRS[a]} while the pathfinder says ${DIRS[f]}.`;
+  if (d[3]) msg += ' Jammed: its move may be scrambled.';
+  say.textContent = msg;
+  scene.setIntent({ chosen: a === 9 ? f : a, follow: f, followed: a === 9 });
+}
+
+// Compass rose: one wedge per direction (north up). Red = probability of choosing that move directly,
+// gold = probability of reaching it by "follow the pathfinder", white outline = the move it took.
+function drawRose(p, a, f) {
+  const R0 = 10, R1 = 54, span = R1 - R0, h = 0.34;
+  const P = (r, t) => `${(r * Math.sin(t)).toFixed(1)},${(-r * Math.cos(t)).toFixed(1)}`;
+  const wedge = (r0, r1, t, cls) => `<path class="${cls}" d="M${P(r0, t - h)} L${P(r1, t - h)} A${r1} ${r1} 0 0 1 ${P(r1, t + h)} L${P(r0, t + h)} A${r0} ${r0} 0 0 0 ${P(r0, t - h)} Z"/>`;
+  let svg = `<circle class="ring" r="${R1}"/><circle class="ring" r="${R0 + span / 2}"/>`;
+  [['N', 0], ['E', 2], ['S', 4], ['W', 6]].forEach(([l, k]) => { svg += `<text class="lbl" x="${P(R1 + 8, (k * Math.PI) / 4).split(',')[0]}" y="${P(R1 + 8, (k * Math.PI) / 4).split(',')[1]}">${l}</text>`; });
+  const rad = (x) => R0 + span * Math.min(1, Math.sqrt(x) * 1.3);   // area-like scaling: 10% is still visible
+  for (let k = 0; k < 8; k++) {
+    const t = (k * Math.PI) / 4;
+    const own = rad(p[k]);
+    const via = f === k ? p[9] : 0;
+    const top = rad(p[k] + via);
+    if (p[k] > 0.004) svg += wedge(R0, own, t, 'own');
+    if (via > 0.004) svg += wedge(own, top, t, 'via');
+    if (a === k || (a === 9 && f === k)) svg += wedge(R0, Math.max(top, R0 + 6), t, 'chosen');
+  }
+  svg += `<circle class="hov" r="${(3 + 14 * p[8]).toFixed(1)}"/>`;
+  if (a === 8) svg += `<circle class="chosen" r="${(3 + 14 * p[8]).toFixed(1)}"/>`;
+  $('#mind-rose').innerHTML = svg;
+}
+
+// ------------------------------------------------------------------ the neural network view
+const unb64 = (b) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+const NET_OUT = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'Hover', 'Follow pathfinder'];
+const HEAT = (() => {   // 256-step color ramp for neuron activity: dark -> orange -> pale
+  const stops = [[0, [30, 33, 37]], [0.45, [194, 65, 12]], [0.8, [255, 166, 77]], [1, [255, 244, 214]]];
+  return Array.from({ length: 256 }, (_, n) => {
+    const v = n / 255;
+    for (let i = 1; i < stops.length; i++) if (v <= stops[i][0]) {
+      const [a, ca] = stops[i - 1], [b, cb] = stops[i], k = (v - a) / (b - a);
+      return `rgb(${ca.map((x, j) => Math.round(x + (cb[j] - x) * k)).join(',')})`;
+    }
+    return 'rgb(255,244,214)';
+  });
+})();
+
+function openNet(on, silent = false) {
+  S.net.open = on;
+  $('#net').hidden = !on;
+  if (on) document.body.dataset.net = '1'; else delete document.body.dataset.net;
+  S.net.drawn = '';
+  applyInset();
+  if (!silent) redraw();
+  if (on) {
+    if (S.focus < 0) setFocus(0, true);
+    scene.follow(S.focus);
+    loadBrain();
+  } else {
+    scene.resetView();
+  }
+}
+
+async function loadBrain() {
+  const R = S.replay;
+  if (!R || S.focus < 0) return;
+  const res = R.res;
+  $('#net-who').textContent = `UAV-${S.focus + 1}`;
+  if (!res.rep.thinking) {
+    S.net.data = null; S.net.key = '';
+    $('#net-meta').textContent = 'Scripted A* enemy: no neural network to show. Pick a learned enemy.';
+    $('#net-why').textContent = '';
+    const cv = $('#net-canvas'); cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    return;
+  }
+  const key = `${S.mode}|${res.difficulty}|${res.seed}|${res.battles}|${res.rep.index}|${S.focus}`;
+  if (S.net.key === key && (S.net.data || S.net.pending === key)) return;
+  S.net.key = key;
+  S.net.data = null;
+  let d = S.net.cache.get(key);
+  if (!d) {
+    $('#net-loading').hidden = false;
+    S.net.pending = key;
+    try {
+      d = await api('/api/brain', { map: S.mapId, layout: S.layout, difficulty: res.difficulty, seed: res.seed, n: res.battles, battle: res.rep.index, drone: S.focus });
+    } catch (e) {
+      if (S.net.key === key) { $('#net-loading').hidden = true; flashError(e.message); }
+      return;
+    } finally {
+      if (S.net.pending === key) S.net.pending = '';
+    }
+    d.localU8 = unb64(d.local); d.globU8 = unb64(d.glob); d.attU8 = unb64(d.att_map); d.gattU8 = unb64(d.att_gmap);
+    d.layersU8 = d.layers.map(unb64);
+    d.stepAt = new Map(d.t.map((t, i) => [t, i]));
+    // the server re-ran the battle from its seed: it must be the battle on screen, step for step
+    const frames = res.rep.frames;
+    d.matches = d.t.every((t, i) => !frames[t] || frames[t].d[S.focus][0] === d.cell[i]);
+    if (!d.matches) console.warn('RED CELL: network re-run did not reproduce this replay exactly');
+    S.net.cache.set(key, d);
+    if (S.net.cache.size > 8) S.net.cache.delete(S.net.cache.keys().next().value);
+  }
+  if (S.net.key !== key) return;   // the viewer moved on while this was loading
+  $('#net-loading').hidden = true;
+  S.net.data = d;
+  S.net.drawn = '';
+}
+
+function drawNet(idx) {
+  const d = S.net.data, cv = $('#net-canvas');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  // which recorded decision belongs to this frame (after the drone's last decision, keep showing it, dimmed)
+  let i = d.stepAt.get(idx);
+  const live = i !== undefined;
+  if (!live) i = idx > d.t[d.t.length - 1] ? d.t.length - 1 : 0;
+  S.net.step = live ? i : -1;
+  ctx.globalAlpha = live ? 1 : 0.45;
+  const label = (t, x, y, color = '#a3a097', size = 11) => { ctx.fillStyle = color; ctx.font = `600 ${size}px "Barlow Condensed", sans-serif`; ctx.fillText(t.toUpperCase(), x, y); };
+  const mono = (t, x, y, color = '#ebe9e4', align = 'left') => { ctx.fillStyle = color; ctx.font = '10.5px "IBM Plex Mono", monospace'; ctx.textAlign = align; ctx.fillText(t, x, y); ctx.textAlign = 'left'; };
+
+  // ---------------- inputs
+  const x0 = 14, y0 = 24, LV = Math.min(132, H - 150), cL = LV / 11;
+  label('Input · local view', x0, y0 - 8);
+  const lb = i * 9 * 121, ch = (c, r, k) => d.localU8[lb + c * 121 + r * 11 + k] / 255;
+  for (let r = 0; r < 11; r++) for (let k = 0; k < 11; k++) {
+    const h = ch(0, r, k), blocked = ch(1, r, k) > 0.5;
+    let rgb = blocked ? [52, 56, 61] : [40 + 120 * h, 48 + 112 * h, 36 + 92 * h];
+    const mix = (c2, a) => { rgb = rgb.map((v, j) => v + (c2[j] - v) * a); };
+    mix([63, 208, 255], 0.45 * ch(2, r, k));
+    mix([255, 181, 71], 0.4 * ch(3, r, k));
+    mix([255, 255, 255], 0.7 * ch(7, r, k));
+    ctx.fillStyle = `rgb(${rgb.map(Math.round).join(',')})`;
+    ctx.fillRect(x0 + k * cL, y0 + r * cL, cL - 0.5, cL - 0.5);
+    const cxp = x0 + (k + 0.5) * cL, cyp = y0 + (r + 0.5) * cL;
+    if (ch(4, r, k) > 0.2) { ctx.fillStyle = '#5cf0a0'; ctx.fillRect(cxp - cL * 0.25, cyp - cL * 0.25, cL * 0.5, cL * 0.5); }
+    if (ch(5, r, k) > 0.1) { ctx.fillStyle = '#7fe3ff'; ctx.beginPath(); ctx.arc(cxp, cyp, cL * 0.22, 0, 7); ctx.fill(); }
+    if (ch(6, r, k) > 0.1 && !(r === 5 && k === 5)) { ctx.fillStyle = '#ff4d5e'; ctx.beginPath(); ctx.arc(cxp, cyp, cL * 0.28, 0, 7); ctx.fill(); }
+    if (S.net.att) { ctx.fillStyle = `rgba(255,79,216,${(0.7 * (d.attU8[i * 121 + r * 11 + k] / 255) ** 1.8).toFixed(3)})`; ctx.fillRect(x0 + k * cL, y0 + r * cL, cL - 0.5, cL - 0.5); }
+  }
+  ctx.strokeStyle = '#ff8080'; ctx.lineWidth = 2; ctx.strokeRect(x0 + 5 * cL, y0 + 5 * cL, cL, cL);   // the drone itself
+  // the nine channels the network actually receives
+  const TS = Math.floor((LV - 36) / 3), tx = x0 + LV + 14;
+  const SHORT = ['terrain', 'blocked', 'radar', 'jammers', 'pads', 'intercept', 'drones', 'base', 'threat'];
+  label('Its 9 input channels', tx, y0 - 8);
+  for (let c = 0; c < 9; c++) {
+    const gx = tx + (c % 3) * (TS + 10), gy = y0 + Math.floor(c / 3) * (TS + 12), cs = TS / 11;
+    for (let r = 0; r < 11; r++) for (let k = 0; k < 11; k++) { ctx.fillStyle = HEAT[d.localU8[lb + c * 121 + r * 11 + k]]; ctx.fillRect(gx + k * cs, gy + r * cs, cs, cs); }
+    ctx.fillStyle = '#6e6b65'; ctx.font = '9px "IBM Plex Mono", monospace';
+    ctx.fillText(SHORT[c], gx, gy + TS + 9);
+  }
+  // whole-map summary and status
+  const y1 = y0 + LV + 24, MV = Math.min(96, H - y1 - 8), cG = MV / 16, gb = i * 8 * 256;
+  label('Input · whole map', x0, y1 - 8);
+  for (let r = 0; r < 16; r++) for (let k = 0; k < 16; k++) {
+    const g = (c) => d.globU8[gb + c * 256 + r * 16 + k] / 255;
+    let rgb = [40 + 120 * g(0), 48 + 112 * g(0), 36 + 92 * g(0)];
+    const mix = (c2, a) => { rgb = rgb.map((v, j) => v + (c2[j] - v) * Math.min(1, a)); };
+    mix([52, 56, 61], g(1)); mix([63, 208, 255], 0.5 * g(2)); mix([255, 181, 71], 0.45 * g(3)); mix([255, 255, 255], 0.8 * g(5)); mix([255, 77, 94], 1.6 * g(6));
+    ctx.fillStyle = `rgb(${rgb.map(Math.round).join(',')})`;
+    ctx.fillRect(x0 + k * cG, y1 + r * cG, cG - 0.3, cG - 0.3);
+    if (S.net.att) { ctx.fillStyle = `rgba(255,79,216,${(0.65 * (d.gattU8[i * 256 + r * 16 + k] / 255) ** 1.8).toFixed(3)})`; ctx.fillRect(x0 + k * cG, y1 + r * cG, cG - 0.3, cG - 0.3); }
+  }
+  const sx = x0 + MV + 14, sw = LV + 14 + 3 * TS + 20 - MV - 14 - 92;
+  label('Input · status', sx, y1 - 8);
+  const vec = d.vec[i], signed = [true, true, false, false, false, false, false, false, false, false], scale = [1, 1, 1, 1, 1, 1, 1, 1, 1, 2];
+  const short = ['base dx', 'base dy', 'distance', 'detected', 'jammed', 'time', 'pos x', 'pos y', 'swarm', 'threat'];
+  vec.forEach((v, k) => {
+    const yy = y1 + k * Math.max(9.6, (MV - 2) / 10);
+    ctx.fillStyle = '#6e6b65'; ctx.font = '8.5px "IBM Plex Mono", monospace'; ctx.fillText(short[k], sx, yy + 7);
+    const bx = sx + 58, bw = Math.max(30, sw);
+    ctx.fillStyle = '#26282b'; ctx.fillRect(bx, yy + 1, bw, 6);
+    ctx.fillStyle = HEAT[220];
+    const f = Math.max(-1, Math.min(1, v / scale[k]));
+    if (signed[k]) ctx.fillRect(f < 0 ? bx + bw / 2 + f * bw / 2 : bx + bw / 2, yy + 1, Math.abs(f) * bw / 2, 6);
+    else ctx.fillRect(bx, yy + 1, Math.max(0, f) * bw, 6);
+  });
+
+  // ---------------- hidden layers
+  const ox = W - 200;                                  // outputs column
+  const ax = x0 + LV + 14 + 3 * TS + 20 + 34;          // first hidden column
+  const avail = H - y0 - 10;
+  const cs = Math.max(2.4, Math.min(5.2, (avail - 3 * 16) / 40));
+  const ct = Math.min(cs * 1.45, (ox - 60 - ax - 48 * cs - 10 - 70) / 32);
+  const layerAt = (li) => { const sz = d.layer_info[li].size; return { cols: sz === 512 ? 32 : sz === 64 ? 8 : 16, rows: sz === 512 ? 16 : sz === 64 ? 8 : 16 }; };
+  const grid = (li, gx, gy, c, title) => {
+    const { cols, rows } = layerAt(li), u = d.layersU8[li], n = cols * rows, off = i * n;
+    let sum = 0;
+    for (let j = 0; j < n; j++) { const v = u[off + j]; sum += v; ctx.fillStyle = HEAT[v]; ctx.fillRect(gx + (j % cols) * c, gy + Math.floor(j / cols) * c, c - 0.6, c - 0.6); }
+    if (title) label(title, gx, gy - 5, '#a3a097', 10.5);
+    return { x: gx, y: gy, w: cols * c, h: rows * c, mean: sum / n / 255, cols, c };
+  };
+  const bundle = (a, b, strength) => {   // a schematic sheaf of connections from block a to block b
+    for (let k = 0; k < 9; k++) {
+      const ya = a.y + a.h * (k + 0.5) / 9, yb = b.y + b.h * (k + 0.5) / 9;
+      ctx.strokeStyle = `rgba(255,170,90,${(0.05 + 0.3 * strength).toFixed(3)})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(a.x + a.w + 2, ya);
+      ctx.bezierCurveTo(a.x + a.w + 30, ya, b.x - 30, yb, b.x - 2, yb); ctx.stroke();
+    }
+  };
+  const rowH = 16 * cs + 16;
+  const enc = [['Local view encoder', 0, 1], ['Whole-map encoder', 2, 3], ['Status encoder', 4, -1]];
+  const blocks = enc.map(([name, l1, l2], r) => {
+    const gy = y0 + 4 + r * rowH;
+    const g1 = grid(l1, ax, gy, cs, `${name} · ${d.layer_info[l1].size}${l2 >= 0 ? ' → ' + d.layer_info[l2].size : ''}`);
+    if (l2 < 0) return g1;
+    const g2 = grid(l2, ax + 32 * cs + 22, gy, cs, '');
+    bundle(g1, g2, g1.mean);
+    return g2;
+  });
+  const ty = y0 + 4 + (3 * rowH - 16 * ct - 16) / 2 + 8;
+  const tA = grid(5, ax + 48 * cs + 22 + 60, ty, ct, 'Trunk · 256');
+  const tB = grid(6, tA.x + tA.w + 46, ty, ct, 'Trunk · 256');
+  blocks.forEach((b) => bundle(b, tA, b.mean));
+  bundle(tA, tB, tA.mean);
+
+  // ---------------- outputs
+  const probs = d.p[i], a = d.a[i], f = d.f[i];
+  label('Outputs · 10 actions', ox, y0 - 8);
+  const oy = (k) => y0 + 8 + k * Math.min(22, (H - y0 - 52) / 10);
+  const outX = ox + 12;
+  // the last-layer neurons that pushed hardest for (orange) or against (blue) the chosen action
+  const cmax = Math.max(...d.contrib[i].map(Math.abs), 1e-9);
+  d.contrib_idx[i].forEach((j, k) => {
+    const c = d.contrib[i][k], w = Math.abs(c) / cmax;
+    const nx = tB.x + (j % 16 + 0.5) * ct, ny = tB.y + (Math.floor(j / 16) + 0.5) * ct;
+    ctx.strokeStyle = c > 0 ? `rgba(255,138,61,${(0.25 + 0.65 * w).toFixed(3)})` : `rgba(92,200,255,${(0.25 + 0.65 * w).toFixed(3)})`;
+    ctx.lineWidth = 0.6 + 2.6 * w;
+    ctx.beginPath(); ctx.moveTo(nx, ny); ctx.bezierCurveTo(nx + 60, ny, outX - 60, oy(a), outX - 8, oy(a)); ctx.stroke();
+    ctx.strokeStyle = c > 0 ? '#ff8a3d' : '#5cc8ff'; ctx.lineWidth = 1.2; ctx.strokeRect(nx - ct / 2, ny - ct / 2, ct, ct);
+  });
+  NET_OUT.forEach((name, k) => {
+    const p = probs[k], y = oy(k);
+    ctx.fillStyle = HEAT[Math.round(Math.min(1, p * 1.6) * 255)];
+    ctx.beginPath(); ctx.arc(outX, y, 3 + 6 * Math.sqrt(p), 0, 7); ctx.fill();
+    if (k === a) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(outX, y, 3 + 6 * Math.sqrt(p) + 3, 0, 7); ctx.stroke(); }
+    ctx.fillStyle = k === a ? '#ffffff' : '#a3a097'; ctx.font = `${k === a ? 700 : 500} 12px "Barlow Condensed", sans-serif`;
+    ctx.fillText(k === 9 ? `Follow pathfinder (${NET_OUT[f]})` : name, outX + 14, y + 4);
+    mono(`${Math.round(p * 100)}%`, W - 14, y + 4, k === a ? '#fff' : '#a3a097', 'right');
+  });
+  const v = d.v[i], vy = oy(10) + 6;
+  label('Forecast', ox, vy, '#a3a097', 11);
+  mono(`${v >= 0 ? '+' : ''}${v.toFixed(1)}  ${v >= 6 ? 'likely through' : v >= 2 ? 'unsure' : 'likely stopped'}`, W - 14, vy, '#ebe9e4', 'right');
+  ctx.globalAlpha = 1;
+
+  // ---------------- header and footer text
+  const total = d.params >= 1e6 ? `${(d.params / 1e6).toFixed(1)}M` : `${Math.round(d.params / 1e3)}K`;
+  $('#net-who').textContent = `UAV-${d.drone + 1}`;
+  $('#net-meta').textContent = `${total} parameters · 7 hidden layers · T+${pad2(idx)}${live ? '' : ' · no longer flying'}${d.matches ? '' : ' · re-run differs'}`;
+  const names = [...d.names.local.map((n) => `${n} nearby`), ...d.names.glob.map((n) => `map: ${n.toLowerCase()}`), ...d.names.vec.map((n) => n.toLowerCase())];
+  const top = d.att_share[i].map((v2, k) => [v2, names[k]]).sort((p1, p2) => p2[0] - p1[0]).slice(0, 3);
+  const why = $('#net-why');
+  why.textContent = '';
+  why.append('What drove this decision: ');
+  top.forEach(([v2, n], k) => { const b = document.createElement('b'); b.textContent = `${n} ${Math.round(v2 * 100)}%`; why.append(b); if (k < 2) why.append(' · '); });
 }
 
 // ------------------------------------------------------------------ overlay + tags
@@ -609,6 +1047,16 @@ function redraw() {
       const ok = !canPlace(S.tool, S.hover);
       L.push({ type: 'outline', cell: S.hover, color: occ ? '#ff4d5e' : ok ? COLORS[S.tool] : '#556270' });
     }
+  }
+  if (S.phase === 'attack' && S.net.open && S.net.att && S.net.data && S.net.step >= 0) {
+    // project the drone's attention (over its 11x11 local view) onto the map cells around it
+    const d = S.net.data, i = S.net.step, c = d.cell[i], cx = c % 32, cy = Math.floor(c / 32);
+    const data = new Array(1024).fill(0);
+    for (let r = 0; r < 11; r++) for (let k = 0; k < 11; k++) {
+      const x = cx - 5 + k, y = cy - 5 + r;
+      if (x >= 0 && y >= 0 && x < 32 && y < 32) data[y * 32 + x] = (d.attU8[i * 121 + r * 11 + k] / 255) ** 2.2;
+    }
+    L.push({ type: 'heat', data, color: '#ff4fd8', max: 0.62 });
   }
   if (S.phase === 'debrief' && S.result) {
     const db = S.result.debrief;
@@ -639,7 +1087,16 @@ function updateTags() {
   if (!S.map) return;
   add('Base', S.map.base_cell, '#e8eef4', 3);
   const spawnCells = S.map.spawn.map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
-  if (spawnCells.length) add('Drone entry · north', spawnCells[Math.floor(spawnCells.length / 2)], COLORS.enemy, 1.2);
+  if (S.mode === '360') {
+    // one label per side that has an entry zone, at the entry cell nearest the middle of that edge
+    const sides = { N: (x, y) => y <= 1, S: (x, y) => y >= 30, W: (x, y) => x <= 1, E: (x, y) => x >= 30 };
+    for (const [name, on] of Object.entries(sides)) {
+      const cells = spawnCells.filter((c) => on(c % 32, Math.floor(c / 32)));
+      if (cells.length < 3) continue;
+      const mid = cells.reduce((b, c) => (Math.hypot(c % 32 - 15.5, Math.floor(c / 32) - 15.5) < Math.hypot(b % 32 - 15.5, Math.floor(b / 32) - 15.5) ? c : b));
+      add(`Entry ${name}`, mid, COLORS.enemy, 1.2);
+    }
+  } else if (spawnCells.length) add('Drone entry · north', spawnCells[Math.floor(spawnCells.length / 2)], COLORS.enemy, 1.2);
   const bs = S.phase === 'debrief' && S.result?.debrief?.blind_spot;
   if (bs) {
     add('Blind spot', bs.cell, COLORS.enemy, 1.6, true);
@@ -654,6 +1111,7 @@ function onKey(e) {
   const tool = Object.entries(UNIT_INFO).find(([, u]) => u.key === e.key);
   if (tool && S.phase === 'defend') setTool(tool[0]);
   if (e.key === ' ' && S.phase === 'attack') { e.preventDefault(); togglePlay(); }
+  if ((e.key === 'n' || e.key === 'N') && S.phase === 'attack') openNet(!S.net.open);
   if (e.key === 'Enter' && S.phase === 'defend' && !e.target.matches('button')) { e.preventDefault(); launch(); }
 }
 
@@ -674,7 +1132,7 @@ async function openHood() {
     return;
   }
   $('#chart-label').textContent = strong
-    ? `Training curve: breach rate vs. ${data.strong_layouts} strong defenses`
+    ? `Training curve${S.mode === '360' ? ', 360° theater' : ''}: breach rate vs. ${data.strong_layouts} strong defenses`
     : 'Training curve: breach rate on a fixed benchmark of defenses';
   const W = 600, H = 300, P = { l: 46, r: 16, t: 16, b: 34 };
   const D = S.cfg.drones;

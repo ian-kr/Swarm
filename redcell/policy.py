@@ -60,6 +60,47 @@ class AttackerPolicy(nn.Module):
             logits, value = self.actor(z), self.critic(z).squeeze(-1)
         return logits.float(), value.float()
 
+    # names and sizes of the hidden layers, in the order explain() returns them
+    LAYERS = [("Local encoder", 512), ("Local encoder", 256), ("Map encoder", 512), ("Map encoder", 256),
+              ("Status encoder", 64), ("Trunk", 256), ("Trunk", 256)]
+
+    def explain(self, local, glob, cell, vec, action: int) -> dict:
+        """Look inside one drone's decision (for the in-game network view).
+
+        local (9, 11, 11), glob (8, 16, 16), cell (), vec (10,) for ONE drone; action = the action it took.
+        Returns the ReLU activations of every hidden layer, the logits and value, each last-layer neuron's
+        contribution to the chosen action's logit (activation x output weight), and attention:
+        |input x d logit[action] / d input| for every input element, i.e. how much each input moved
+        the score of the move it picked (gradient x input attribution).
+        """
+        with torch.enable_grad():
+            loc = local.detach().float().reshape(1, 1, -1).requires_grad_(True)
+            glo = glob.detach().float().reshape(1, -1).requires_grad_(True)
+            vin = vec.detach().float().reshape(1, 1, -1).requires_grad_(True)
+            s, c = C.GRID // POS, int(cell)
+            here = torch.zeros(1, 1, POS * POS)
+            here[0, 0, ((c // C.GRID) // s) * POS + (c % C.GRID) // s] = 1.0
+            g = torch.cat([glo[:, None], here], -1)
+            acts = []
+
+            def run(seq, x):
+                for layer in seq:
+                    x = layer(x)
+                    if isinstance(layer, nn.ReLU):
+                        acts.append(x[0, 0])
+                return x
+
+            z = run(self.trunk, torch.cat([run(self.local, loc), run(self.glob, g), run(self.vec, vin)], -1))
+            logits, value = self.actor(z)[0, 0], self.critic(z)[0, 0, 0]
+            logits[action].backward()
+        return dict(
+            acts=[a.detach() for a in acts], logits=logits.detach(), value=float(value.detach()),
+            contrib=(z[0, 0] * self.actor.weight[action]).detach(),
+            att_local=(loc.grad * loc).detach().abs().view(N_LOCAL_CH, C.LOCAL, C.LOCAL),
+            att_glob=(glo.grad * glo).detach().abs().view(N_GLOBAL_CH, C.GLOBAL, C.GLOBAL),
+            att_vec=(vin.grad * vin).detach().abs().view(-1),
+        )
+
     @torch.no_grad()
     def act_env(self, obs, greedy: bool = False):
         """Run on a full env observation; returns actions (B,D), logp, value."""

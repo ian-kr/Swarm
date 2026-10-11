@@ -31,7 +31,7 @@ from redcell.benchmark import build_strong_set, scripted_rates  # noqa: E402
 from redcell.env import DefenseEnv, Layout, MapTensors  # noqa: E402
 from redcell.policy import load_policy  # noqa: E402
 from redcell.search import evaluate_layouts  # noqa: E402
-from redcell.terrain import load_maps  # noqa: E402
+from redcell.terrain import artifacts, load_maps  # noqa: E402
 from train import evaluate  # noqa: E402
 
 TEMPERATURES = {"veteran": 1.0, "regular": 2.0, "recruit": 3.0}
@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=8, help="battles per strong layout per checkpoint")
     ap.add_argument("--max-stall", type=float, default=0.1)
     ap.add_argument("--stages", type=int, default=5, help="training-timeline snapshots to export")
+    ap.add_argument("--mode", default="north", choices=["north", "360"])
     args = ap.parse_args()
     dev = args.device
 
@@ -67,7 +68,8 @@ def main():
     metrics = before + [{**m, "steps": m["steps"] + off_steps, "time": round(m["time"] + off_time, 1)} for m in read_metrics(d)]
     steps_at = {m["update"]: m["steps"] for m in metrics}
 
-    ms = load_maps()
+    ms = load_maps(mode=args.mode)
+    art = artifacts(args.mode)
     maps = MapTensors(ms, dev)
     maps_cpu = MapTensors(ms, "cpu")
     print("building strong-defense benchmark with the scripted A* attacker...")
@@ -107,8 +109,8 @@ def main():
     h_map, h_lay, h_scripted = build_strong_set(ms, maps_cpu, seed=98765)
     h_map_d = h_map.to(dev)
     h_lay_d = Layout(*(getattr(h_lay, f).to(dev) for f in Layout.FIELDS))
-    models = ROOT / "models"
-    models.mkdir(exist_ok=True)
+    models = ROOT / art["models"]
+    models.mkdir(parents=True, exist_ok=True)
     c = torch.load(best["path"], map_location="cpu", weights_only=False)
     torch.save({"model": c["model"], "hidden": c.get("hidden", 256), "update": best["update"], "device": c.get("device")},
                models / "veteran.pt")
@@ -117,7 +119,7 @@ def main():
         net = load(best["path"], temp)
         hb, hs = evaluate_layouts(net, maps, h_lay_d, h_map_d, args.seeds, dev, gen_seed=555, return_stall=True)
         rate, _ = evaluate(net, maps, dev, n_envs=args.n)
-        levels[key] = {"checkpoint": "models/veteran.pt", "update": best["update"], "temperature": temp,
+        levels[key] = {"checkpoint": f"{art['models']}/veteran.pt", "update": best["update"], "temperature": temp,
                        "eval_breach": round(hb.mean().item(), 4), "stall": round(hs.mean().item(), 4),
                        "random_breach": round(rate, 4)}
         print(f"  {key:8s} (T={temp}): held-out breach {hb.mean():.3f}  stall {hs.mean():.3f}  random {rate:.3f}")
@@ -145,11 +147,12 @@ def main():
                          "strong": round(s["strong"], 4), "random": round(s["random"], 4), "stall": round(s["stall"], 4),
                          "veteran": s is best})
 
-    with open(ROOT / "data" / "training_metrics.jsonl", "w") as f:
+    with open(ROOT / art["metrics"], "w") as f:
         for m in metrics:
             f.write(json.dumps(m) + "\n")
     spec = {
-        "metrics": "data/training_metrics.jsonl",
+        "mode": args.mode,
+        "metrics": art["metrics"],
         "device": c.get("device"),
         "benchmark": "strong",
         "strong_layouts": int(s_map.numel()),
@@ -164,7 +167,7 @@ def main():
         "timeline": timeline,
         "runs": ([Path(args.prior).name] if prior else []) + [d.name],
     }
-    out = ROOT / "data" / "difficulties.json"
+    out = ROOT / art["difficulties"]
     out.write_text(json.dumps(spec, indent=2))
     print(json.dumps({k: v for k, v in spec.items() if k != "curve"}, indent=2))
     print(f"wrote {out}")

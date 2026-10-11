@@ -141,3 +141,53 @@ def test_game_reports_stall_and_rejects_unknown_stage():
     assert 0.0 <= r["stall_rate"] <= 1.0 and r["rep"]["stalled"] >= 0
     with pytest.raises(LayoutError):
         g.simulate(0, {}, f"stage:{len(g.timeline)}", n=2)
+
+
+def test_360_theater_spawns_on_every_side_with_a_central_base():
+    ms360 = load_maps(mode="360")
+    G = C.GRID
+    x, y = np.arange(C.N_CELLS) % G, np.arange(C.N_CELLS) // G
+    edge = np.minimum.reduce([x, y, G - 1 - x, G - 1 - y])
+    for i in range(ms360.n):
+        bx, by = ms360.base_cell[i] % G, ms360.base_cell[i] // G
+        assert abs(bx - 15.5) <= 2 and abs(by - 15.5) <= 2, ms360.names[i]
+        spawn = ms360.spawn_mask[i]
+        assert (edge[spawn] < C.SPAWN_ROWS).all()
+        sides = [(y < C.SPAWN_ROWS), (y >= G - C.SPAWN_ROWS), (x < C.SPAWN_ROWS), (x >= G - C.SPAWN_ROWS)]
+        assert sum((spawn & s).sum() >= 8 for s in sides) >= 3, ms360.names[i]   # Escarpment: cliff on one side
+        assert (edge[ms360.place_mask[i]] >= C.PLACE_MIN_ROW).all()             # same buffer as the north mode
+        assert (ms360.dist[i, ms360.base_cell[i]][spawn] < 900).all()           # every entry cell can reach the base
+
+
+def test_tactic_discovery_reports_patterns_with_examples():
+    from redcell.game import Game
+    g = Game()
+    weak = {"radar": [688, 713], "jammer": [661], "pad": [786, 750]}   # lets plenty of scripted drones through
+    r = g.simulate(0, weak, "scripted", seed=5)
+    assert r["tactics"], "expected at least one pattern from a leaky defense"
+    for t in r["tactics"]:
+        assert t["kind"] in {"corridor", "probing", "saturation", "pincer", "decoy"}
+        assert t["name"] and t["text"] and 0 < t["share"] <= 1 and t["paths"]
+        assert str(t["battle"]) in r["examples"] and r["examples"][str(t["battle"])]["frames"]
+    tight = g.simulate(0, {"radar": [], "jammer": [], "pad": []}, "scripted", seed=5, n=4)
+    assert isinstance(tight["tactics"], list)
+
+
+def test_network_view_reproduces_the_replayed_battle():
+    """brain() re-runs a battle from its seed: the inspected drone must make exactly the moves the replay showed."""
+    from redcell.game import Game
+    g = Game()
+    lay = {"radar": [688, 713], "jammer": [661], "pad": [786, 750]}
+    r = g.simulate(0, lay, "veteran", seed=99, n=16)
+    b = r["rep"]["index"]
+    br = g.brain(0, lay, "veteran", 99, 16, b, 2)
+    frames = r["rep"]["frames"]
+    assert br["steps"] > 0 and len(br["layers"]) == 7
+    assert all(frames[t]["d"][2][0] == c for t, c in zip(br["t"], br["cell"]))
+    assert all(abs(sum(p) - 1) < 0.01 for p in br["p"])
+    assert all(abs(sum(s) - 1) < 0.01 for s in br["att_share"])
+
+
+def test_north_theater_unchanged():
+    assert MS.mode == "north" and MS.names[0] == "Ridgeback"
+    assert (np.arange(C.N_CELLS)[MS.spawn_mask[0]] // C.GRID < C.SPAWN_ROWS).all()

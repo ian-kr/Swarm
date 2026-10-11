@@ -1,6 +1,7 @@
 """Drive the web UI end to end in headless Chromium and save screenshots.
 
     python tests/e2e_ui.py OUT_DIR [difficulty]   (server must be running on :8000, or set RC_URL)
+    RC_MODE=360 python tests/e2e_ui.py OUT_DIR veteran   (the 360-degree theater)
 """
 import os
 import sys
@@ -22,6 +23,10 @@ with sync_playwright() as p:
     pg.wait_for_selector("#dlg-intro[open]")
     pg.click("#dlg-intro button")
     pg.wait_for_timeout(800)
+    if os.environ.get("RC_MODE") == "360":
+        pg.click('#seg-mode button[data-mode="360"]')
+        pg.wait_for_function("window.__rc.S.mode === '360' && window.__rc.S.map")
+        pg.wait_for_timeout(1500)
 
     def click_cell(c):
         xy = pg.evaluate("""(c) => { const {scene} = window.__rc; const v = scene.cellWorld(c).project(scene.camera);
@@ -51,6 +56,14 @@ with sync_playwright() as p:
     pg.wait_for_selector("#playback:not([hidden])", timeout=60000)
     pg.wait_for_function("window.__rc.S.replay && window.__rc.S.replay.t > 12", timeout=60000)
     pg.screenshot(path=out / "2_attack.png")
+    if pg.evaluate("!!window.__rc.S.replay.res.rep.thinking"):   # learned enemy: open the neural network view
+        pg.keyboard.press("n")
+        pg.wait_for_function("window.__rc.S.net.data !== null && window.__rc.S.net.drawn !== ''", timeout=90000)
+        pg.wait_for_timeout(1500)
+        print("network view:", pg.text_content("#net-why"))
+        pg.screenshot(path=out / "2b_network.png")
+        pg.keyboard.press("n")
+        pg.wait_for_timeout(500)
     pg.click("#btn-skip")
     pg.wait_for_selector("#panel-right:not([hidden])")
     pg.wait_for_timeout(600)

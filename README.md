@@ -29,6 +29,19 @@ improving slowly; update 120 is the Veteran. How it differs from A\* against str
 because it waits for openings (13% of its moves are hovers), spreads its attacks over 126 cells per battle vs 65
 (harder to predict), and follows the pathfinder on 36% of its moves, improvising the rest.
 
+**360° theater** (separate swarm, same pipeline and settings, 16 minutes from random flight), on 245 held-out strong
+360° defenses, 24 battles each:
+
+| Attacker | Breach rate vs. strong defenses | Drones that never committed | vs. random defenses |
+|---|---|---|---|
+| Scripted A\* | 26.6% | | |
+| **Veteran (learned)** | **56.7%** (2.1×) | 7.3% | 82.2% |
+| Regular | 42.8% | 30.3% | 73.0% |
+| Recruit | 32.8% | 40.4% | 61.6% |
+
+With every edge open, choosing *where* to attack matters more, and the learned swarm's lead over A\* more than
+doubles. It went from 14% to 58% on the strong benchmark in 18 updates.
+
 Our first Veteran scored higher on paper (31.5% on the same held-out set) but 12% of its drones never attacked, and
 against the strongest defenses none did. The fix (below) traded some headline breach rate for an enemy that always
 commits.
@@ -43,8 +56,32 @@ commits.
 3. **Review.** The after-action report shows your breach rate across all attacks, the corridors the drones used, an
    automatic blind-spot diagnosis with a suggested radar position, the A\* planner view, and how you compare to an
    AI-optimized defense.
+   During any replay against a learned enemy, the **What it's thinking** panel shows the selected drone's live
+   network output: a compass of move probabilities (its own choice vs. "follow the pathfinder"), and the critic's
+   value estimate as the drone's own forecast. Click any drone to switch.
+   The report's **Tactics the swarm found** section mines all 64 attacks for recurring patterns: approach
+   corridors (named by direction and character: wait-and-dash, valley run, radar-shadow run), saturation, pincers,
+   decoy patterns and multi-axis probing. Each one can be drawn on the map or watched in an example attack. Nobody
+   programmed these: the swarm was only rewarded for getting through. Against the same defenses, the scripted A\*
+   planner's breaches come out as plain radar-shadow or direct runs; the learned swarm's as wait-and-dash.
+   Press **N** (or **Open network** in that panel) for the full **neural network view**: the drone's actual
+   inputs (its 11×11 local view and 9 input channels, the 16×16 map summary, 10 status values), every hidden layer
+   lighting up as it fires, the 10 action outputs and the value head, the last-layer neurons that pushed hardest for
+   or against the move it chose, and attention (input × gradient) showing which inputs changed the decision most,
+   also projected onto the terrain around the drone while the camera follows it. The server re-runs the exact battle
+   from its seed to record this (`/api/brain`), so every number shown is what the network computed in that replay.
 4. **Watch it learn.** Replay *your* defense against snapshots of the swarm from its own training run, from its first
    update (random flight) to the Veteran, and watch the breach rate climb as it learns.
+
+## Two theaters
+
+Switch with **Threat axis** above the enemy list. Each theater has its own maps and its own trained swarm.
+
+* **North axis** (the original): six maps built around an attack from the north, with the base near the southern edge.
+* **360°**: six maps with the base mid-map (Crossroads, Citadel, Hill Country, Escarpment, Steppe, Saddle). Drones
+  enter along every edge, so the defense has to cover all sides, and the swarm can probe for the weakest one.
+  Defenses stay at least 6 cells in from every edge, the same buffer the north mode keeps from its entry line.
+  Same budget: the scripted A\* attacker gets through random defenses about equally often in both theaters (78%).
 
 ## Where pathfinding is used
 
@@ -121,6 +158,10 @@ bash scripts/cloud_train.sh            # check_rocm → train → select difficu
 python train.py --envs 4096 --updates 600 --amp --out checkpoints/amd
 python scripts/select_difficulties.py checkpoints/amd     # add --prior DIR for a run resumed from DIR
 python scripts/recommend.py
+# the 360-degree theater: same pipeline with --mode 360 (models/360/, data/*_360.*)
+python -m redcell.terrain 360
+python train.py --mode 360 --follow-bias 0 --amp --out checkpoints/amd_360
+python scripts/select_difficulties.py checkpoints/amd_360 --mode 360 && python scripts/recommend.py --mode 360
 ```
 
 Then copy `models/` (including `models/timeline/`), `data/difficulties.json`, `data/recommended.json` and
@@ -144,6 +185,6 @@ redcell/search.py     blue-team genetic search
 redcell/game.py       running a player's layout, debrief analysis
 train.py              PPO training loop
 server.py             FastAPI server for the web client
-web/                  Three.js client (Three.js and fonts vendored, works offline)
+web/                  Three.js client (Three.js and fonts vendored, procedural Web Audio sound; works offline)
 scripts/              ROCm check, cloud training, difficulty selection, layout recommendation
 ```

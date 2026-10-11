@@ -21,7 +21,7 @@ from redcell.astar import ScriptedAttacker  # noqa: E402
 from redcell.env import DefenseEnv, Layout, MapTensors  # noqa: E402
 from redcell.policy import load_policy  # noqa: E402
 from redcell.search import evaluate_layouts  # noqa: E402
-from redcell.terrain import load_maps  # noqa: E402
+from redcell.terrain import artifacts, load_maps  # noqa: E402
 
 
 def has_duplicates(lay: Layout) -> torch.Tensor:
@@ -52,17 +52,19 @@ def main():
     ap.add_argument("--generations", type=int, default=12)
     ap.add_argument("--population", type=int, default=512)
     ap.add_argument("--seeds", type=int, default=4)
+    ap.add_argument("--mode", default="north", choices=["north", "360"])
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     dev = torch.device(args.device)
 
-    spec = json.loads((ROOT / "data" / "difficulties.json").read_text())
+    art = artifacts(args.mode)
+    spec = json.loads((ROOT / art["difficulties"]).read_text())
     nets = {k: load_policy(ROOT / v["checkpoint"], dev) for k, v in spec["levels"].items()}
     for k, net in nets.items():
         net.amp = dev.type != "cpu"          # bf16 matmuls: far faster on AMD GPUs
         net.temperature = float(spec["levels"][k].get("temperature", 1.0))
     target = nets["veteran"]
-    ms = load_maps()
+    ms = load_maps(mode=args.mode)
     maps = MapTensors(ms, dev)
     maps_cpu = MapTensors(ms, "cpu")
     helper = DefenseEnv(maps, 1, dev, auto_reset=False, seed=0)
@@ -101,7 +103,7 @@ def main():
         out[str(mi)] = {"layout": layout, "breach": breach}
         print(f"  -> {layout}  {breach}")
 
-    path = ROOT / "data" / "recommended.json"
+    path = ROOT / art["recommended"]
     path.write_text(json.dumps(out, indent=2))
     print(f"wrote {path}")
 

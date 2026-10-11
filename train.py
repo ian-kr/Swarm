@@ -81,6 +81,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "checkpoints"))
     ap.add_argument("--resume", default=None)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--mode", default="north", choices=["north", "360"], help="theater: north-axis or 360-degree threat")
     ap.add_argument("--follow-bias", type=float, default=2.0,
                     help="initial logit bonus for the follow-the-pathfinder action (0 = start from random flight)")
     ap.add_argument("--stall-weight", type=float, default=0.5,
@@ -108,14 +109,14 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     print(f"device: {describe_device(dev)}")
 
-    maps = MapTensors(load_maps(), dev)
+    maps = MapTensors(load_maps(mode=args.mode), dev)
     env = DefenseEnv(maps, args.envs, dev, auto_reset=True, seed=args.seed)
     env.team_reward = args.team_reward
     env.reset()
     strong = None
     if not args.no_strong_eval:
         from redcell.terrain import load_maps as _lm
-        ms_cpu = _lm()
+        ms_cpu = _lm(mode=args.mode)
         s_map, s_lay, s_astar = build_strong_set(ms_cpu, MapTensors(ms_cpu, "cpu"))
         strong = (s_map.to(dev), Layout(*(getattr(s_lay, f).to(dev) for f in Layout.FIELDS)))
         print(f"strong benchmark: {s_map.numel()} layouts, scripted A* breach {s_astar:.3f}")
@@ -276,7 +277,7 @@ def main():
         early = update <= 30 and update % 2 == 0          # learning is fastest early: finer snapshots for Recruit
         if early or update % args.save_every == 0 or update == start + 1 or update == start + args.updates:
             torch.save({"model": net.state_dict(), "opt": opt.state_dict(), "update": update,
-                        "hidden": args.hidden, "follow_bias": args.follow_bias, "metrics": rec, "pool": pool.state_dict(), "device": describe_device(dev)},
+                        "hidden": args.hidden, "follow_bias": args.follow_bias, "mode": args.mode, "metrics": rec, "pool": pool.state_dict(), "device": describe_device(dev)},
                        out / f"ckpt_{update:05d}.pt")
 
 

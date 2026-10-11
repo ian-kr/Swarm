@@ -120,6 +120,59 @@ def _flatlands(rng):
     return h, (16, 27)
 
 
+# ---- 360-degree theater: the base sits mid-map and drones enter along every edge
+def _crossroads(rng):
+    x, y = _grid()
+    h = 0.15 + sum(_bump(x, y, cx, cy, 4.6, h=0.8) for cx, cy in [(6, 6), (26, 7), (7, 26), (25, 25)])
+    h += _bump(x, y, 16, 3, 2.5, h=0.3) + _bump(x, y, 29, 16, 2.2, h=0.3)
+    return h, (16, 16)
+
+
+def _citadel(rng):
+    x, y = _grid()
+    d = np.hypot(x - 16, y - 16)
+    h = 0.12 + 0.8 * np.exp(-(((d - 9) / 1.8) ** 2))
+    for ang in (0.5, 2.0, 3.4, 5.0):   # four gaps, not evenly spaced
+        h -= _bump(x, y, 16 + 9 * math.cos(ang), 16 + 9 * math.sin(ang), 2.0, h=0.65)
+    h += _bump(x, y, 3, 28, 2.5, h=0.3) + _bump(x, y, 29, 4, 2.5, h=0.3)
+    return h, (16, 16)
+
+
+def _hill_country(rng):
+    x, y = _grid()
+    h = np.full((G, G), 0.15, np.float32)
+    r = np.random.default_rng(11)
+    placed = 0
+    while placed < 16:
+        cx, cy = r.uniform(2, 30), r.uniform(2, 30)
+        if math.hypot(cx - 16, cy - 16) < 5:
+            continue
+        h += _bump(x, y, cx, cy, r.uniform(1.8, 3.0), h=r.uniform(0.35, 0.7))
+        placed += 1
+    return h, (16, 16)
+
+
+def _escarpment(rng):
+    x, y = _grid()
+    h = 0.15 + 0.9 / (1 + np.exp((x - 7.5) * 1.6))          # high plateau along the west edge
+    h += _bump(x, y, 22, 7, 2.6, h=0.4) + _bump(x, y, 24, 24, 2.8, h=0.45) + _bump(x, y, 14, 27, 2.0, h=0.3)
+    return h, (17, 16)
+
+
+def _steppe(rng):
+    x, y = _grid()
+    h = 0.12 + _ridge(x, y, [(4, 9), (12, 6)], 1.4, 0.3) + _ridge(x, y, [(20, 25), (28, 22)], 1.4, 0.3)
+    h += _bump(x, y, 25, 9, 2.0, h=0.4) + _bump(x, y, 7, 22, 2.0, h=0.35)
+    return h, (16, 16)
+
+
+def _saddle(rng):
+    x, y = _grid()
+    h = 0.15 + _bump(x, y, 9, 9, 5.0, h=0.95) + _bump(x, y, 23, 23, 5.0, h=0.95)
+    h += _bump(x, y, 27, 6, 2.2, h=0.3) + _bump(x, y, 5, 26, 2.2, h=0.3)
+    return h, (16, 16)
+
+
 MAPS = [
     ("Ridgeback", "An east-west ridge with two passes shields the base.", _ridgeback),
     ("Twin Valleys", "Two north-south valleys funnel attackers toward the base.", _twin_valleys),
@@ -128,6 +181,30 @@ MAPS = [
     ("Canyon Run", "A winding canyon hides anything flying low inside it.", _canyon_run),
     ("Flatlands", "Open ground: radar sees far, but there is nowhere to hide sensors.", _flatlands),
 ]
+
+MAPS_360 = [
+    ("Crossroads", "Four massifs leave two crossing valleys, with the base at the junction.", _crossroads),
+    ("Citadel", "A ring ridge with four gaps surrounds the base.", _citadel),
+    ("Hill Country", "Hills on every side cast radar shadows in all directions.", _hill_country),
+    ("Escarpment", "A cliff wall guards the west, so the threat comes from three sides.", _escarpment),
+    ("Steppe", "Open ground in every direction: radar sees far, and nothing hides.", _steppe),
+    ("Saddle", "The base sits on a saddle between two peaks.", _saddle),
+]
+
+# A theater = a map set plus where drones enter. "north": the original game, drones enter along the
+# northern edge. "360": drones enter along every edge, the base is mid-map, and defenses must stay
+# PLACE_MIN_ROW cells in from every edge (the same buffer the north mode keeps from the spawn line).
+THEATERS = {
+    "north": dict(maps=MAPS, cache="maps.npz", spawn="north", label="North axis"),
+    "360": dict(maps=MAPS_360, cache="maps_360.npz", spawn="ring", label="360°"),
+}
+
+
+def artifacts(mode: str = "north") -> dict:
+    """Where a theater's trained models and data live, relative to the repo root."""
+    sfx = "" if mode == "north" else f"_{mode}"
+    return dict(difficulties=f"data/difficulties{sfx}.json", recommended=f"data/recommended{sfx}.json",
+                metrics=f"data/training_metrics{sfx}.jsonl", models="models" if mode == "north" else f"models/{mode}")
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +286,7 @@ def _flight_graph(passable: np.ndarray, rng):
     return (rows, cols, w), cost
 
 
-def build_map(recipe, seed: int):
+def build_map(recipe, seed: int, spawn: str = "north"):
     rng = np.random.default_rng(seed)
     h, (bx, by) = recipe(rng)
     h = h + _noise(rng)
@@ -236,8 +313,13 @@ def build_map(recipe, seed: int):
 
     base_cell = int(by * G + bx)
     reach = np.isfinite(dist[base_cell])
-    spawn_mask = (xy[:, 1] < C.SPAWN_ROWS) & passable & reach
-    place_mask = passable & reach & (xy[:, 1] >= C.PLACE_MIN_ROW) & ~base_mask
+    if spawn == "ring":
+        edge = np.minimum.reduce([xy[:, 0], xy[:, 1], G - 1 - xy[:, 0], G - 1 - xy[:, 1]])
+        spawn_mask = (edge < C.SPAWN_ROWS) & passable & reach
+        place_mask = passable & reach & (edge >= C.PLACE_MIN_ROW) & ~base_mask
+    else:
+        spawn_mask = (xy[:, 1] < C.SPAWN_ROWS) & passable & reach
+        place_mask = passable & reach & (xy[:, 1] >= C.PLACE_MIN_ROW) & ~base_mask
     assert spawn_mask.sum() >= 8, "map has too few spawn cells"
 
     vis = _line_of_sight(h, C.RADAR_MAST, C.DRONE_ALT, C.UNITS["radar"]["range"] + 0.5)
@@ -262,31 +344,35 @@ class MapSet:
     dist: np.ndarray         # (M, N, N) float32  dist[target, cell]
     next_hop: np.ndarray     # (M, N, N) int16    next_hop[target, cell]
     cell_cost: np.ndarray    # (M, N)
+    mode: str = "north"      # theater key in THEATERS
 
     @property
     def n(self):
         return len(self.names)
 
 
-def load_maps(rebuild: bool = False) -> MapSet:
-    if CACHE.exists() and not rebuild:
-        z = np.load(CACHE, allow_pickle=False)
+def load_maps(rebuild: bool = False, mode: str = "north") -> MapSet:
+    th = THEATERS[mode]
+    maps, cache = th["maps"], DATA_DIR / th["cache"]
+    if cache.exists() and not rebuild:
+        z = np.load(cache, allow_pickle=False)
         if int(z["version"]) == CACHE_VERSION:
-            return MapSet(names=[MAPS[i][0] for i in range(len(MAPS))],
-                          blurbs=[MAPS[i][1] for i in range(len(MAPS))],
+            return MapSet(names=[m[0] for m in maps], blurbs=[m[1] for m in maps], mode=mode,
                           **{k: z[k] for k in ("heights", "passable", "base_cell", "base_mask", "spawn_mask",
                                                "place_mask", "vis", "dist", "next_hop", "cell_cost")})
-    built = [build_map(fn, seed=100 + i) for i, (_, _, fn) in enumerate(MAPS)]
+    built = [build_map(fn, seed=100 + i, spawn=th["spawn"]) for i, (_, _, fn) in enumerate(maps)]
     arrays = {k: np.stack([b[k] for b in built]) for k in built[0]}
     DATA_DIR.mkdir(exist_ok=True)
-    np.savez_compressed(CACHE, version=CACHE_VERSION, **arrays)
-    return load_maps()
+    np.savez_compressed(cache, version=CACHE_VERSION, **arrays)
+    return load_maps(mode=mode)
 
 
 if __name__ == "__main__":
+    import sys
     import time
+    mode = sys.argv[1] if len(sys.argv) > 1 else "north"
     t0 = time.time()
-    ms = load_maps(rebuild=True)
+    ms = load_maps(rebuild=True, mode=mode)
     print(f"built {ms.n} maps in {time.time() - t0:.1f}s")
     for i, name in enumerate(ms.names):
         print(f"  {name:13s} passable={ms.passable[i].mean():.2f} spawn={ms.spawn_mask[i].sum():2d} "
