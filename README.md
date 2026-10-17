@@ -14,8 +14,6 @@ In SWARM you build an air defense on real-feeling terrain, then face a drone swa
 battles and learned to find the holes: radar shadows behind ridges, gaps between sensors, jammer-free lanes.
 The debrief shows *where* and *why* your defense failed, and how to fix it.
 
-Built for the **Full Sail "Pathways & Perception" serious games & simulation challenge** (pathfinding) at KnightHacks.
-
 ## Screenshots
 
 | | |
