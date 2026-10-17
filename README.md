@@ -1,6 +1,12 @@
 # SWARM
 
+> 🏆 **1st Place, Best Use of AMD Technologies at [Knight Hacks IX](https://knight-hacks-ix.devpost.com/) (2026)**
+>
+> 📄 **[Read the Devpost submission](https://devpost.com/software/swarm-oqg6l4)**
+
 **A counter-drone defense trainer where the enemy swarm learned to attack using reinforcement learning on AMD GPUs.**
+
+![SWARM replaying a learned-swarm attack on the Crossroads map](docs/images/main_attack.jpg)
 
 Cheap attack drones are now one of the biggest threats to bases and critical infrastructure. Operators and planners
 usually practice against scripted enemies that act the same way every time, which teaches the wrong lessons.
@@ -9,6 +15,15 @@ battles and learned to find the holes: radar shadows behind ridges, gaps between
 The debrief shows *where* and *why* your defense failed, and how to fix it.
 
 Built for the **Full Sail "Pathways & Perception" serious games & simulation challenge** (pathfinding) at KnightHacks.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Plan phase: placing radars, jammers and interceptor pads](docs/images/plan_defense.jpg) | ![Attack replay with the "What it's thinking" panel](docs/images/attack_later.jpg) |
+| **Plan.** Spend a 15-point budget on radars, jammers and interceptor pads, then pick an opposing force. | **Attack.** Replay one of 64 simulated attacks. The panel shows the selected drone's live move probabilities and forecast. |
+| ![Neural network view showing inputs, hidden layers and outputs](docs/images/neural_network.jpg) | ![After-action report with breach rate, blind spot and discovered tactics](docs/images/after_action_report.jpg) |
+| **Neural network view.** Press **N** to see the drone's inputs, all 7 hidden layers, its 10 outputs and attention projected onto the terrain. | **Review.** Breach rate across all attacks, a blind-spot diagnosis with a suggested radar, and the tactics the swarm found on its own. |
 
 ## Results (AMD Radeon Pro W7900D, ROCm)
 
